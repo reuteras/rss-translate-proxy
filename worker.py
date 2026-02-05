@@ -1,4 +1,7 @@
+import base64
+import hashlib
 import html
+import os
 import re
 import time
 from typing import Any, Dict, List, Tuple
@@ -11,6 +14,8 @@ from app import (
     CFG,
     DEEPL_API_KEY,
     DEEPL_ENDPOINT,
+    LIBRETRANSLATE_API_KEY,
+    LIBRETRANSLATE_ENDPOINT,
     cache_get,
     cache_key_for_item,
     cache_put,
@@ -30,9 +35,23 @@ from app import (
 )
 
 
+class _DeepLQuotaExceeded(RuntimeError):
+    pass
+
+
 def log(msg: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     print(f"[{ts}] {msg}", flush=True)
+
+
+_LOG_ONCE: set[str] = set()
+
+
+def log_once(msg: str) -> None:
+    if msg in _LOG_ONCE:
+        return
+    _LOG_ONCE.add(msg)
+    log(msg)
 
 
 class _TextExtractor(HTMLParser):
@@ -100,15 +119,51 @@ def html_to_text(html: str) -> str:
         return ""
     # Strip script/style blocks first
     html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
-    # Preserve images as markers
+    # Preserve images as markers; store data URIs to disk and emit URLs.
+    def _img_repl(m: re.Match) -> str:
+        src = m.group(1)
+        if src.startswith("data:image/"):
+            name = store_data_image(src)
+            if name:
+                return f"\n[[[IMGURL:{name}]]]\n"
+        return f"\n[[[IMG:{src}]]]\n"
+
     html = re.sub(
         r'(?is)<img[^>]*?src=["\']([^"\']+)["\'][^>]*>',
-        lambda m: f"\n[[[IMG:{m.group(1)}]]]\n",
+        _img_repl,
         html,
     )
     parser = _TextExtractor()
     parser.feed(html)
     return parser.get_text()
+
+
+def store_data_image(data_uri: str) -> str:
+    m = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$", data_uri)
+    if not m:
+        return ""
+    mime = m.group(1).lower()
+    b64 = m.group(2)
+    try:
+        data = base64.b64decode(b64)
+    except Exception:
+        return ""
+    ext = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }.get(mime, ".bin")
+    digest = hashlib.sha256(data).hexdigest()
+    name = f"{digest}{ext}"
+    os.makedirs(CFG.image_dir, exist_ok=True)
+    path = os.path.join(CFG.image_dir, name)
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(data)
+    return name
 
 
 def extract_sections(text: str, headings: List[str]) -> str:
@@ -239,11 +294,131 @@ def deepl_translate_sync(texts: List[str], target_lang: str) -> List[str]:
     with httpx.Client(timeout=30) as client:
         r = client.post(DEEPL_ENDPOINT, json=payload, headers=headers)
         if r.status_code != 200:
-            raise RuntimeError(f"DeepL error {r.status_code}: {r.text}")
+            msg = f"DeepL error {r.status_code}: {r.text}"
+            if r.status_code == 456 or "Quota exceeded" in r.text:
+                raise _DeepLQuotaExceeded(msg)
+            raise RuntimeError(msg)
 
         payload = r.json()
         translations = payload.get("translations", [])
         return [tr.get("text", "") for tr in translations]
+
+
+def _lt_endpoint() -> str:
+    ep = (LIBRETRANSLATE_ENDPOINT or "").strip()
+    if not ep:
+        raise RuntimeError("LIBRETRANSLATE_ENDPOINT not set")
+    if ep.endswith("/translate"):
+        return ep
+    return ep.rstrip("/") + "/translate"
+
+
+def _lt_ready(timeout_seconds: int = 180) -> bool:
+    base = _lt_endpoint().rsplit("/translate", 1)[0]
+    url = base + "/languages"
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with httpx.Client(timeout=5) as client:
+                r = client.get(url)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def libretranslate_sync(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+    payload = {
+        "q": texts,
+        "source": source_lang or "auto",
+        "target": target_lang,
+        "format": "text",
+    }
+    if LIBRETRANSLATE_API_KEY:
+        payload["api_key"] = LIBRETRANSLATE_API_KEY
+
+    with httpx.Client(timeout=180) as client:
+        r = client.post(_lt_endpoint(), json=payload)
+        if r.status_code != 200:
+            raise RuntimeError(f"LibreTranslate error {r.status_code}: {r.text}")
+
+        data = r.json()
+        translations = data.get("translatedText")
+        if isinstance(translations, list):
+            return [t or "" for t in translations]
+        # Some servers return a single string for single input
+        if isinstance(translations, str):
+            return [translations]
+        raise RuntimeError("LibreTranslate response missing translatedText")
+
+
+def translate_sync(texts: List[str], target_lang: str) -> List[str]:
+    provider = (CFG.translation_provider or "deepl").lower()
+    if provider == "deepl":
+        try:
+            return deepl_translate_sync(texts, target_lang)
+        except _DeepLQuotaExceeded:
+            log_once("deepl quota exceeded; falling back to libretranslate")
+        except RuntimeError as e:
+            if "DEEPL_API_KEY not set" in str(e):
+                log_once("deepl key missing; falling back to libretranslate")
+            else:
+                raise
+    if provider == "libretranslate":
+        # LibreTranslate expects lower-case language codes like 'uk' and 'en'
+        if not _lt_ready():
+            raise RuntimeError("LibreTranslate not ready (languages endpoint timeout)")
+        lt_target = target_lang.lower()
+        lt_source = (CFG.source_lang or "auto").lower()
+        return _translate_with_chunking(texts, lt_source, lt_target)
+    # Fallback to LibreTranslate when DeepL is unavailable or quota exceeded
+    log_once("deepl unavailable; using libretranslate")
+    if not _lt_ready():
+        raise RuntimeError("LibreTranslate not ready (languages endpoint timeout)")
+    lt_target = target_lang.lower()
+    lt_source = (CFG.source_lang or "auto").lower()
+    return _translate_with_chunking(texts, lt_source, lt_target)
+
+
+def _chunk_text(text: str, limit: int = 4000) -> List[str]:
+    if not text:
+        return [""]
+    parts: List[str] = []
+    buf: List[str] = []
+    size = 0
+    for para in re.split(r"\n{2,}", text):
+        p = para.strip()
+        if not p:
+            continue
+        add = len(p) + 2
+        if size + add > limit and buf:
+            parts.append("\n\n".join(buf))
+            buf = [p]
+            size = len(p)
+        else:
+            buf.append(p)
+            size += add
+    if buf:
+        parts.append("\n\n".join(buf))
+    return parts or [text]
+
+
+def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+    out: List[str] = []
+    for t in texts:
+        chunks = _chunk_text(t)
+        if len(chunks) == 1:
+            out.extend(libretranslate_sync([t], source_lang, target_lang))
+            continue
+        translated_chunks: List[str] = []
+        for i, c in enumerate(chunks, start=1):
+            log(f"libretranslate chunk {i}/{len(chunks)} len={len(c)}")
+            translated_chunks.extend(libretranslate_sync([c], source_lang, target_lang))
+        out.append("\n\n".join(translated_chunks))
+    return out
+    raise RuntimeError(f"Unknown translation provider: {provider}")
 
 
 def translate_feed(feed_cfg) -> int:
@@ -264,6 +439,8 @@ def translate_feed(feed_cfg) -> int:
     original_title: Dict[int, str] = {}
     original_desc: Dict[int, str] = {}
     original_link: Dict[int, str] = {}
+    clamped_title: Dict[int, str] = {}
+    clamped_desc: Dict[int, str] = {}
 
     for idx, entry in enumerate(entries):
         item_id = pick_item_id(entry)
@@ -287,6 +464,8 @@ def translate_feed(feed_cfg) -> int:
 
         title = clamp(title, CFG.max_chars_per_item)
         desc = clamp(desc, CFG.max_chars_per_item)
+        clamped_title[idx] = title
+        clamped_desc[idx] = desc
 
         src_h = text_hash(title, desc)
         ckey = cache_key_for_item(feed_cfg.id, item_id, src_h, CFG.target_lang)
@@ -302,11 +481,11 @@ def translate_feed(feed_cfg) -> int:
             title_prot, title_tokens = title, {}
             desc_prot, desc_tokens = desc, {}
 
-        title_prot, title_markers = protect_markers(title_prot)
-        desc_prot, desc_markers = protect_markers(desc_prot)
-
         title_prot = protect_breaks(title_prot)
         desc_prot = protect_breaks(desc_prot)
+
+        title_prot, title_markers = protect_markers(title_prot)
+        desc_prot, desc_markers = protect_markers(desc_prot)
 
         to_translate.append(
             (idx, item_id, src_h, ckey, title_tokens, desc_tokens, title_markers, desc_markers)
@@ -319,12 +498,31 @@ def translate_feed(feed_cfg) -> int:
         titles_batch = [translated_title[i] for i in idxs]
         descs_batch = [translated_desc[i] for i in idxs]
 
-        try:
-            titles_out = deepl_translate_sync(titles_batch, CFG.target_lang)
-            descs_out = deepl_translate_sync(descs_batch, CFG.target_lang)
-        except Exception as e:
-            log(f"feed={feed_cfg.id} translation failed: {e}")
-            return 0
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            try:
+                titles_out = translate_sync(titles_batch, CFG.target_lang)
+                descs_out = translate_sync(descs_batch, CFG.target_lang)
+                break
+            except Exception as e:
+                msg = str(e)
+                retryable = any(
+                    frag in msg
+                    for frag in (
+                        "LibreTranslate not ready",
+                        "timed out",
+                        "Connection refused",
+                        "connect: connection refused",
+                    )
+                )
+                if retryable and attempt < max_attempts:
+                    log(
+                        f"feed={feed_cfg.id} translation retry {attempt}/{max_attempts} after error: {msg}"
+                    )
+                    time.sleep(10)
+                    continue
+                log(f"feed={feed_cfg.id} translation failed: {e}")
+                return 0
 
         written = 0
         for j, (
@@ -339,12 +537,14 @@ def translate_feed(feed_cfg) -> int:
         ) in enumerate(
             to_translate
         ):
-            t_title = restore_breaks(titles_out[j])
-            t_desc = restore_breaks(descs_out[j])
-            t_title = restore_iocs(t_title, title_tokens)
-            t_desc = restore_iocs(t_desc, desc_tokens)
+            t_title = titles_out[j]
+            t_desc = descs_out[j]
             t_title = restore_markers(t_title, title_markers)
             t_desc = restore_markers(t_desc, desc_markers)
+            t_title = restore_breaks(t_title)
+            t_desc = restore_breaks(t_desc)
+            t_title = restore_iocs(t_title, title_tokens)
+            t_desc = restore_iocs(t_desc, desc_tokens)
 
             try:
                 cache_put(
@@ -367,8 +567,8 @@ def translate_feed(feed_cfg) -> int:
     translated_desc = {}
     for idx, entry in enumerate(entries):
         item_id = pick_item_id(entry)
-        title = original_title.get(idx, "")
-        desc = original_desc.get(idx, "")
+        title = clamped_title.get(idx, "") or original_title.get(idx, "")
+        desc = clamped_desc.get(idx, "") or original_desc.get(idx, "")
 
         src_h = text_hash(title, desc)
         ckey = cache_key_for_item(feed_cfg.id, item_id, src_h, CFG.target_lang)

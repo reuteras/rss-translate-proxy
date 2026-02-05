@@ -1,8 +1,11 @@
 server:
   host: "0.0.0.0"
   port: 8086
+  base_url: "https://your-tailscale-name.example"
 
 translation:
+  provider: "deepl"          # deepl | libretranslate
+  source_lang: "auto"        # auto | uk | en | ...
   target_lang: "EN"          # DeepL target language
   max_chars_per_item: 15000  # safety bound
   preserve_iocs: true        # keep URLs, hashes, CVEs unchanged
@@ -14,6 +17,7 @@ translation:
 cache:
   sqlite_path: "data/cache.sqlite3"
   ttl_seconds: 2592000       # 30 days; translated entries older than this can be purged
+  image_dir: "data/images"   # where extracted images are stored
 
 feeds:
   - id: "certua"

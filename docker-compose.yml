@@ -16,3 +16,14 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      - LT_DISABLE_WEB_UI=true
+      - LT_UPDATE_MODELS=true
+      - LT_LOAD_ONLY=en,uk
+      - LT_WORKERS=1
+    volumes:
+      - ./libretranslate-data:/home/libretranslate/.local/share

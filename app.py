@@ -8,13 +8,19 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import mimetypes
 import yaml
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
 from feedgen.feed import FeedGenerator
 
 DEEPL_ENDPOINT = os.environ.get(
     "DEEPL_ENDPOINT", "https://api-free.deepl.com/v2/translate"
 )
+LIBRETRANSLATE_ENDPOINT = os.environ.get(
+    "LIBRETRANSLATE_ENDPOINT", "https://libretranslate.com/translate"
+)
+LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "").strip()
 
 
 # ----------------------------
@@ -38,6 +44,9 @@ class FeedConfig:
 class AppConfig:
     host: str
     port: int
+    base_url: str
+    translation_provider: str
+    source_lang: str
     target_lang: str
     max_chars_per_item: int
     preserve_iocs: bool
@@ -47,6 +56,7 @@ class AppConfig:
     full_content_timeout_seconds: int
     sqlite_path: str
     ttl_seconds: int
+    image_dir: str
     feeds: List[FeedConfig]
 
 
@@ -90,6 +100,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     return AppConfig(
         host=str(server.get("host", "0.0.0.0")),
         port=int(server.get("port", 8086)),
+        base_url=str(server.get("base_url", "")).rstrip("/"),
+        translation_provider=str(translation.get("provider", "deepl")).lower(),
+        source_lang=str(translation.get("source_lang", "auto")).lower(),
         target_lang=str(translation.get("target_lang", "EN")).upper(),
         max_chars_per_item=int(translation.get("max_chars_per_item", 15000)),
         preserve_iocs=bool(translation.get("preserve_iocs", True)),
@@ -101,15 +114,18 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         ),
         sqlite_path=str(cache.get("sqlite_path", "data/cache.sqlite3")),
         ttl_seconds=int(cache.get("ttl_seconds", 60 * 60 * 24 * 30)),
+        image_dir=str(cache.get("image_dir", "data/images")),
         feeds=feeds_cfg,
     )
 
 
 CFG = load_config()
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
-if not DEEPL_API_KEY:
+if not DEEPL_API_KEY and CFG.translation_provider == "deepl":
     # You can still start the service, but requests will fail until key is set.
     print("WARNING: DEEPL_API_KEY is not set. Translation requests will fail.")
+if not LIBRETRANSLATE_API_KEY and CFG.translation_provider == "libretranslate":
+    print("WARNING: LIBRETRANSLATE_API_KEY is not set. Translation requests may fail.")
 
 
 # ----------------------------
@@ -356,16 +372,16 @@ def protect_breaks(text: str) -> str:
         return ""
     text = text.replace("\r\n", "\n")
     # Preserve paragraph and line breaks through translation.
-    text = text.replace("\n\n", "\n__PARA__\n")
-    text = text.replace("\n", "\n__LINE__\n")
+    text = text.replace("\n\n", "\n<<<PARA>>>\n")
+    text = text.replace("\n", "\n<<<LINE>>>\n")
     return text
 
 
 def restore_breaks(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"\s*__PARA__\s*", "\n\n", text)
-    text = re.sub(r"\s*__LINE__\s*", "\n", text)
+    text = re.sub(r"\s*<<<PARA>>>\s*", "\n\n", text)
+    text = re.sub(r"\s*<<<LINE>>>\s*", "\n", text)
     return text
 
 
@@ -374,18 +390,55 @@ def protect_markers(text: str) -> Tuple[str, Dict[str, str]]:
         return "", {}
     tokens: Dict[str, str] = {}
 
-    def repl(m: re.Match) -> str:
-        key = f"__MARKER_{len(tokens)}__"
+    def make_token() -> str:
+        return f"ZZZMARKER{len(tokens)}ZZZ"
+
+    def repl_data_uri(m: re.Match) -> str:
+        key = make_token()
         tokens[key] = m.group(0)
         return key
 
-    text = re.sub(r"\[\[\[(?:/)?PRE\]\]\]|\[\[\[IMG:.*?\]\]\]", repl, text)
+    # Strip large data URIs before translation, restore later.
+    text = re.sub(
+        r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+",
+        repl_data_uri,
+        text,
+    )
+
+    def repl(m: re.Match) -> str:
+        key = make_token()
+        tokens[key] = m.group(0)
+        return key
+
+    text = re.sub(
+        r"\[\[\[(?:/)?PRE\]\]\]|\[\[\[IMGURL:.*?\]\]\]|\[\[\[IMG:.*?\]\]\]|<<<(?:PARA|LINE)>>>|__IOC_\d+__",
+        repl,
+        text,
+    )
     return text, tokens
 
 
 def restore_markers(text: str, tokens: Dict[str, str]) -> str:
     if not text or not tokens:
         return text or ""
+    # Replace robustly even if translation has added spaces or underscores.
+    def replace_marker(match: re.Match) -> str:
+        idx = match.group(1)
+        key = f"ZZZMARKER{idx}ZZZ"
+        return tokens.get(key, match.group(0))
+
+    text = re.sub(
+        r"Z\s*Z\s*Z\s*M\s*A\s*R\s*K\s*E\s*R\s*(\d+)\s*Z\s*Z\s*Z",
+        replace_marker,
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"M\s*A\s*R\s*K\s*E\s*R\s*[_\s]*?(\d+)",
+        replace_marker,
+        text,
+        flags=re.IGNORECASE,
+    )
     for key, val in tokens.items():
         text = text.replace(key, val)
     return text
@@ -400,9 +453,16 @@ def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> st
     if pre_start not in text and "\n\n" not in text and "[[[IMG:" not in text:
         return html.escape(text)
 
-    parts = re.split(r"(\[\[\[IMG:.*?\]\]\])", text)
+    parts = re.split(r"(\[\[\[IMGURL:.*?\]\]\]|\[\[\[IMG:.*?\]\]\])", text)
     rendered: List[str] = []
     for part in parts:
+        if part.startswith("[[[IMGURL:") and part.endswith("]]]"):
+            name = part[len("[[[IMGURL:") : -3]
+            if name:
+                base = CFG.base_url or ""
+                src = f"{base}/images/{name}" if base else f"/images/{name}"
+                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
+            continue
         if part.startswith("[[[IMG:") and part.endswith("]]]"):
             src = part[len("[[[IMG:") : -3]
             if src:
@@ -506,6 +566,19 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/images/{name}")
+def image(name: str):
+    if not re.fullmatch(r"[A-Fa-f0-9]{64}\.[A-Za-z0-9]+", name):
+        raise HTTPException(status_code=404, detail="Not found")
+    path = os.path.abspath(os.path.join(CFG.image_dir, name))
+    if not path.startswith(os.path.abspath(CFG.image_dir) + os.sep):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    mime, _ = mimetypes.guess_type(path)
+    return FileResponse(path, media_type=mime or "application/octet-stream")
 
 
 @app.get("/feeds/{feed_id}.xml")
