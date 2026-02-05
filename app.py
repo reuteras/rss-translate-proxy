@@ -454,49 +454,74 @@ def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> st
     heading_set = {h.strip() for h in (headings or []) if h and h.strip()}
     pre_start = "[[[PRE]]]"
     pre_end = "[[[/PRE]]]"
-    if pre_start not in text and "\n\n" not in text and "[[[IMG:" not in text:
-        return html.escape(text)
 
-    parts = re.split(r"(\[\[\[IMGURL:.*?\]\]\]|\[\[\[IMG:.*?\]\]\])", text)
+    def render_nonpre(chunk: str, out: List[str]) -> None:
+        if not chunk:
+            return
+        chunk = chunk.replace(pre_start, "").replace(pre_end, "")
+        paras = [p for p in re.split(r"\n{2,}", chunk.strip()) if p.strip()]
+        for p in paras:
+            p = p.strip()
+            if p in heading_set:
+                out.append("<h3>")
+                out.append(html.escape(p))
+                out.append("</h3>")
+                continue
+            if p.endswith(":") and len(p) <= 80 and "\n" not in p:
+                out.append("<p><strong>")
+                out.append(html.escape(p))
+                out.append("</strong></p>")
+                continue
+            out.append("<p>")
+            out.append(html.escape(p).replace("\n", "<br/>"))
+            out.append("</p>")
+
     rendered: List[str] = []
-    for part in parts:
-        if part.startswith("[[[IMGURL:") and part.endswith("]]]"):
-            name = part[len("[[[IMGURL:") : -3]
-            if name:
-                base = CFG.base_url or ""
-                src = f"{base}/images/{name}" if base else f"/images/{name}"
-                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
-            continue
-        if part.startswith("[[[IMG:") and part.endswith("]]]"):
-            src = part[len("[[[IMG:") : -3]
-            if src:
-                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
-            continue
+    i = 0
+    while i < len(text):
+        next_pre = text.find(pre_start, i)
+        next_img = re.search(r"\[\[\[IMGURL:.*?\]\]\]|\[\[\[IMG:.*?\]\]\]", text[i:])
+        next_img_idx = (i + next_img.start()) if next_img else -1
 
-        if pre_end in part:
-            pre_body, rest = part.split(pre_end, 1)
+        # Determine next marker position
+        candidates = [pos for pos in (next_pre, next_img_idx) if pos != -1]
+        if not candidates:
+            render_nonpre(text[i:], rendered)
+            break
+        next_pos = min(candidates)
+
+        # Render text before the marker
+        render_nonpre(text[i:next_pos], rendered)
+
+        if next_pos == next_pre:
+            end = text.find(pre_end, next_pre + len(pre_start))
+            if end == -1:
+                # Unmatched pre; drop marker and continue
+                i = next_pre + len(pre_start)
+                continue
+            pre_body = text[next_pre + len(pre_start) : end]
             rendered.append("<pre>")
             rendered.append(html.escape(pre_body.strip("\n")))
             rendered.append("</pre>")
-            part = rest
+            i = end + len(pre_end)
+        else:
+            m = re.match(
+                r"\[\[\[IMGURL:(.*?)\]\]\]|\[\[\[IMG:(.*?)\]\]\]",
+                text[next_pos:],
+            )
+            if not m:
+                i = next_pos + 1
+                continue
+            name = m.group(1)
+            src = m.group(2)
+            if name:
+                base = CFG.base_url or ""
+                url = f"{base}/images/{name}" if base else f"/images/{name}"
+                rendered.append(f"<img src=\"{html.escape(url)}\"/>")
+            elif src:
+                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
+            i = next_pos + m.end(0)
 
-        para_text = part.strip()
-        if para_text:
-            paras = [p for p in re.split(r"\n{2,}", para_text) if p.strip()]
-            for p in paras:
-                p = p.strip()
-                if p in heading_set:
-                    rendered.append("<h3>")
-                    rendered.append(html.escape(p))
-                    rendered.append("</h3>")
-                elif p.endswith(":") and len(p) <= 80 and "\n" not in p:
-                    rendered.append("<p><strong>")
-                    rendered.append(html.escape(p))
-                    rendered.append("</strong></p>")
-                else:
-                    rendered.append("<p>")
-                    rendered.append(html.escape(p).replace("\n", "<br/>"))
-                    rendered.append("</p>")
     return "\n".join(rendered).strip()
 
 
