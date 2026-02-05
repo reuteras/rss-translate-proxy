@@ -1,0 +1,34 @@
+server:
+  host: "0.0.0.0"
+  port: 8086
+
+translation:
+  target_lang: "EN"          # DeepL target language
+  max_chars_per_item: 15000  # safety bound
+  preserve_iocs: true        # keep URLs, hashes, CVEs unchanged
+  poll_seconds: 3600         # worker polling interval
+  fetch_full_content: false  # fetch article URL content for translation
+  original_mode: "text"      # text | link | none
+  full_content_timeout_seconds: 20
+
+cache:
+  sqlite_path: "data/cache.sqlite3"
+  ttl_seconds: 2592000       # 30 days; translated entries older than this can be purged
+
+feeds:
+  - id: "certua"
+    name: "CERT-UA (English)"
+    source_url: "https://cert.gov.ua/api/articles/rss"
+    item_limit: 30
+    fetch_full_content: true
+    # Optional: fetch full content via JSON API instead of the article link
+    full_content_api_url_template: "https://cert.gov.ua/api/articles/byId?id={id}"
+    # API format: json | xml
+    full_content_api_format: "xml"
+    # Dot-path (json) or tag name (xml) for article body. Comma-separate to merge.
+    full_content_api_text_path: "description,text"
+    full_content_is_html: true
+    # Optionally keep only the sections below (exact heading matches in the rendered text).
+    full_content_extract_sections:
+      - "Загальна інформація"
+      - "Індикатори кіберзагроз"
