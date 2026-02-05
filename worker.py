@@ -648,10 +648,13 @@ def run_once() -> None:
         return
 
     # Purge old cache opportunistically
-    try:
-        cache_purge_old(CFG.sqlite_path, CFG.ttl_seconds)
-    except Exception as e:
-        log(f"cache purge failed: {e}")
+    if CFG.cache_purge_enabled:
+        try:
+            cache_purge_old(CFG.sqlite_path, CFG.ttl_seconds)
+        except Exception as e:
+            log(f"cache purge failed: {e}")
+    else:
+        log("cache purge disabled")
 
     total = 0
     for f in CFG.feeds:
