@@ -358,7 +358,7 @@ def translate_sync(texts: List[str], target_lang: str) -> List[str]:
     provider = (CFG.translation_provider or "deepl").lower()
     if provider == "deepl":
         try:
-            return deepl_translate_sync(texts, target_lang)
+            return _translate_with_chunking_deepl(texts, target_lang)
         except _DeepLQuotaExceeded:
             log_once("deepl quota exceeded; falling back to libretranslate")
         except RuntimeError as e:
@@ -405,6 +405,30 @@ def _chunk_text(text: str, limit: int) -> List[str]:
     return parts or [text]
 
 
+def _chunk_text_bytes(text: str, limit_bytes: int, overhead: int = 400) -> List[str]:
+    if not text:
+        return [""]
+    parts: List[str] = []
+    buf: List[str] = []
+    size = overhead
+
+    for para in re.split(r"\n{2,}", text):
+        p = para.strip()
+        if not p:
+            continue
+        add = len(p.encode("utf-8")) + len("\n\n".encode("utf-8"))
+        if size + add > limit_bytes and buf:
+            parts.append("\n\n".join(buf))
+            buf = [p]
+            size = overhead + len(p.encode("utf-8"))
+        else:
+            buf.append(p)
+            size += add
+    if buf:
+        parts.append("\n\n".join(buf))
+    return parts or [text]
+
+
 def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
     out: List[str] = []
     for t in texts:
@@ -416,6 +440,22 @@ def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: st
         for i, c in enumerate(chunks, start=1):
             log(f"libretranslate chunk {i}/{len(chunks)} len={len(c)}")
             translated_chunks.extend(libretranslate_sync([c], source_lang, target_lang))
+        out.append("\n\n".join(translated_chunks))
+    return out
+
+
+def _translate_with_chunking_deepl(texts: List[str], target_lang: str) -> List[str]:
+    out: List[str] = []
+    for t in texts:
+        # DeepL request limit is 128KiB; keep a safe byte budget
+        chunks = _chunk_text_bytes(t, limit_bytes=CFG.deepl_chunk_bytes)
+        if len(chunks) == 1:
+            out.extend(deepl_translate_sync([t], target_lang))
+            continue
+        translated_chunks: List[str] = []
+        for i, c in enumerate(chunks, start=1):
+            log(f"deepl chunk {i}/{len(chunks)} len={len(c)}")
+            translated_chunks.extend(deepl_translate_sync([c], target_lang))
         out.append("\n\n".join(translated_chunks))
     return out
     raise RuntimeError(f"Unknown translation provider: {provider}")
@@ -499,36 +539,39 @@ def translate_feed(feed_cfg) -> int:
         translated_desc[idx] = desc_prot
 
     if to_translate:
-        log(f"feed={feed_cfg.id} translate batch size={len(to_translate)} provider={CFG.translation_provider}")
-        idxs = [t[0] for t in to_translate]
-        titles_batch = [translated_title[i] for i in idxs]
-        descs_batch = [translated_desc[i] for i in idxs]
+        log(f"feed={feed_cfg.id} translate items={len(to_translate)} provider={CFG.translation_provider}")
+        titles_out: List[str] = []
+        descs_out: List[str] = []
 
-        max_attempts = 5
-        for attempt in range(1, max_attempts + 1):
-            try:
-                titles_out = translate_sync(titles_batch, CFG.target_lang)
-                descs_out = translate_sync(descs_batch, CFG.target_lang)
-                break
-            except Exception as e:
-                msg = str(e)
-                retryable = any(
-                    frag in msg
-                    for frag in (
-                        "LibreTranslate not ready",
-                        "timed out",
-                        "Connection refused",
-                        "connect: connection refused",
+        for k, (idx, item_id, src_h, ckey, title_tokens, desc_tokens, title_markers, desc_markers) in enumerate(
+            to_translate, start=1
+        ):
+            log(f"feed={feed_cfg.id} translate item {k}/{len(to_translate)} id={item_id}")
+            max_attempts = 5
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    titles_out.extend(translate_sync([translated_title[idx]], CFG.target_lang))
+                    descs_out.extend(translate_sync([translated_desc[idx]], CFG.target_lang))
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    retryable = any(
+                        frag in msg
+                        for frag in (
+                            "LibreTranslate not ready",
+                            "timed out",
+                            "Connection refused",
+                            "connect: connection refused",
+                        )
                     )
-                )
-                if retryable and attempt < max_attempts:
-                    log(
-                        f"feed={feed_cfg.id} translation retry {attempt}/{max_attempts} after error: {msg}"
-                    )
-                    time.sleep(10)
-                    continue
-                log(f"feed={feed_cfg.id} translation failed: {e}")
-                return 0
+                    if retryable and attempt < max_attempts:
+                        log(
+                            f"feed={feed_cfg.id} translation retry {attempt}/{max_attempts} after error: {msg}"
+                        )
+                        time.sleep(10)
+                        continue
+                    log(f"feed={feed_cfg.id} translation failed: {e}")
+                    return 0
 
         written = 0
         for j, (

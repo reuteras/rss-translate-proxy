@@ -59,6 +59,8 @@ class AppConfig:
     image_dir: str
     lt_chunk_chars: int
     lt_timeout_seconds: int
+    deepl_chunk_bytes: int
+    render_version: str
     feeds: List[FeedConfig]
 
 
@@ -119,6 +121,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         image_dir=str(cache.get("image_dir", "data/images")),
         lt_chunk_chars=int(translation.get("lt_chunk_chars", 2000)),
         lt_timeout_seconds=int(translation.get("lt_timeout_seconds", 180)),
+        deepl_chunk_bytes=int(translation.get("deepl_chunk_bytes", 120000)),
+        render_version=str(cache.get("render_version", "v1")),
         feeds=feeds_cfg,
     )
 
@@ -206,22 +210,24 @@ def cache_put(
 
 
 def feed_cache_get(path: str, feed_id: str) -> Optional[str]:
+    cache_id = f"{feed_id}|{CFG.render_version}"
     with sqlite3.connect(path) as con:
         row = con.execute(
-            "SELECT xml FROM feed_cache WHERE feed_id = ?", (feed_id,)
+            "SELECT xml FROM feed_cache WHERE feed_id = ?", (cache_id,)
         ).fetchone()
         return row[0] if row else None
 
 
 def feed_cache_put(path: str, feed_id: str, xml: str) -> None:
     now = int(time.time())
+    cache_id = f"{feed_id}|{CFG.render_version}"
     with sqlite3.connect(path) as con:
         con.execute(
             """
             INSERT OR REPLACE INTO feed_cache (feed_id, updated_at, xml)
             VALUES (?, ?, ?)
             """,
-            (feed_id, now, xml),
+            (cache_id, now, xml),
         )
         con.commit()
 

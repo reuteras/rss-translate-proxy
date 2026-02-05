@@ -15,11 +15,13 @@ translation:
   full_content_timeout_seconds: 20
   lt_chunk_chars: 2000       # LibreTranslate chunk size (chars)
   lt_timeout_seconds: 180    # LibreTranslate request timeout
+  deepl_chunk_bytes: 120000  # DeepL chunk size (bytes)
 
 cache:
   sqlite_path: "data/cache.sqlite3"
   ttl_seconds: 2592000       # 30 days; translated entries older than this can be purged
   image_dir: "data/images"   # where extracted images are stored
+  render_version: "v1"       # bump to rebuild feed XML without retranslation
 
 feeds:
   - id: "certua"
