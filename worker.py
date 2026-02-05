@@ -422,12 +422,14 @@ def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: st
 
 
 def translate_feed(feed_cfg) -> int:
+    log(f"feed={feed_cfg.id} fetch start url={feed_cfg.source_url}")
     parsed = feedparser.parse(feed_cfg.source_url)
     if parsed.bozo and not parsed.entries:
         log(f"feed={feed_cfg.id} fetch/parse failed: {parsed.bozo_exception}")
         return 0
 
     entries = parsed.entries[: feed_cfg.item_limit]
+    log(f"feed={feed_cfg.id} entries={len(entries)} item_limit={feed_cfg.item_limit}")
 
     to_translate: List[
         Tuple[int, str, str, str, Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]
@@ -454,6 +456,7 @@ def translate_feed(feed_cfg) -> int:
                 else:
                     full_text = fetch_full_text(str(link))
                 if full_text:
+                    log(f"feed={feed_cfg.id} full-content len={len(full_text)} id={item_id}")
                     desc = full_text
             except Exception as e:
                 log(f"feed={feed_cfg.id} full-content fetch failed: {e}")
@@ -472,7 +475,9 @@ def translate_feed(feed_cfg) -> int:
 
         cached = cache_get(CFG.sqlite_path, ckey)
         if cached:
+            log(f"feed={feed_cfg.id} cache hit id={item_id}")
             continue
+        log(f"feed={feed_cfg.id} cache miss id={item_id}")
 
         if CFG.preserve_iocs:
             title_prot, title_tokens = protect_iocs(title)
@@ -494,6 +499,7 @@ def translate_feed(feed_cfg) -> int:
         translated_desc[idx] = desc_prot
 
     if to_translate:
+        log(f"feed={feed_cfg.id} translate batch size={len(to_translate)} provider={CFG.translation_provider}")
         idxs = [t[0] for t in to_translate]
         titles_batch = [translated_title[i] for i in idxs]
         descs_batch = [translated_desc[i] for i in idxs]

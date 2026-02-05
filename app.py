@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import mimetypes
 import yaml
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.responses import FileResponse
 from feedgen.feed import FeedGenerator
 
@@ -558,6 +558,22 @@ def build_translated_feed_xml(
 app = FastAPI(title="RSS Translate Proxy", version="1.0.0")
 
 
+def _log(msg: str) -> None:
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    print(f"[{ts}] {msg}", flush=True)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    dur_ms = int((time.time() - start) * 1000)
+    _log(
+        f"req method={request.method} path={request.url.path} status={response.status_code} ms={dur_ms}"
+    )
+    return response
+
+
 @app.get("/")
 def root():
     return {
@@ -582,6 +598,7 @@ def image(name: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Not found")
     mime, _ = mimetypes.guess_type(path)
+    _log(f"image serve name={name} bytes={os.path.getsize(path)}")
     return FileResponse(path, media_type=mime or "application/octet-stream")
 
 
@@ -593,7 +610,9 @@ async def translated_feed(feed_id: str):
 
     xml = feed_cache_get(CFG.sqlite_path, feed_id)
     if xml is None:
+        _log(f"feed_cache miss feed_id={feed_id}")
         xml_bytes = build_translated_feed_xml(feed_cfg, [], {}, {}, {}, {}, {})
     else:
+        _log(f"feed_cache hit feed_id={feed_id} bytes={len(xml)}")
         xml_bytes = xml.encode("utf-8")
     return Response(content=xml_bytes, media_type="application/rss+xml; charset=utf-8")
