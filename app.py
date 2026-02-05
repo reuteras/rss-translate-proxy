@@ -351,6 +351,34 @@ def clamp(text: str, max_chars: int) -> str:
     return text[: max_chars - 1] + "…"
 
 
+def _render_text_with_pre(text: str) -> str:
+    if not text:
+        return ""
+    pre_start = "[[[PRE]]]"
+    pre_end = "[[[/PRE]]]"
+    if pre_start not in text and "\n\n" not in text:
+        return html.escape(text)
+
+    parts = text.split(pre_start)
+    rendered: List[str] = []
+    for part in parts:
+        if pre_end in part:
+            pre_body, rest = part.split(pre_end, 1)
+            rendered.append("<pre>")
+            rendered.append(html.escape(pre_body.strip("\n")))
+            rendered.append("</pre>")
+            part = rest
+
+        para_text = part.strip()
+        if para_text:
+            paras = [p for p in re.split(r"\n{2,}", para_text) if p.strip()]
+            for p in paras:
+                rendered.append("<p>")
+                rendered.append(html.escape(p.strip()).replace("\n", "<br/>"))
+                rendered.append("</p>")
+    return "\n".join(rendered).strip()
+
+
 def build_translated_feed_xml(
     feed_cfg: FeedConfig,
     entries: List[Any],
@@ -390,7 +418,8 @@ def build_translated_feed_xml(
 
         combined = ""
         if t_desc:
-            combined += f"<p><strong>English</strong></p>\n{t_desc}\n"
+            rendered_desc = _render_text_with_pre(t_desc)
+            combined += f"<p><strong>English</strong></p>\n{rendered_desc}\n"
         if CFG.original_mode == "text" and item_desc:
             combined += f"\n<hr/>\n<p><strong>Original</strong></p>\n{item_desc}\n"
         elif CFG.original_mode == "link" and link:

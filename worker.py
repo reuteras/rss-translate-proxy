@@ -57,12 +57,16 @@ class _TextExtractor(HTMLParser):
         if tag == "pre":
             self._in_pre = True
             self._newline()
+            self._parts.append("[[[PRE]]]")
+            self._newline()
         elif tag in self._BLOCK_TAGS:
             self._newline()
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "pre":
             self._in_pre = False
+            self._newline()
+            self._parts.append("[[[/PRE]]]")
             self._newline()
         elif tag in self._BLOCK_TAGS:
             self._newline()
