@@ -339,7 +339,7 @@ def libretranslate_sync(texts: List[str], source_lang: str, target_lang: str) ->
     if LIBRETRANSLATE_API_KEY:
         payload["api_key"] = LIBRETRANSLATE_API_KEY
 
-    with httpx.Client(timeout=180) as client:
+    with httpx.Client(timeout=CFG.lt_timeout_seconds) as client:
         r = client.post(_lt_endpoint(), json=payload)
         if r.status_code != 200:
             raise RuntimeError(f"LibreTranslate error {r.status_code}: {r.text}")
@@ -382,7 +382,7 @@ def translate_sync(texts: List[str], target_lang: str) -> List[str]:
     return _translate_with_chunking(texts, lt_source, lt_target)
 
 
-def _chunk_text(text: str, limit: int = 4000) -> List[str]:
+def _chunk_text(text: str, limit: int) -> List[str]:
     if not text:
         return [""]
     parts: List[str] = []
@@ -408,7 +408,7 @@ def _chunk_text(text: str, limit: int = 4000) -> List[str]:
 def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
     out: List[str] = []
     for t in texts:
-        chunks = _chunk_text(t)
+        chunks = _chunk_text(t, CFG.lt_chunk_chars)
         if len(chunks) == 1:
             out.extend(libretranslate_sync([t], source_lang, target_lang))
             continue

@@ -13,6 +13,8 @@ translation:
   fetch_full_content: false  # fetch article URL content for translation
   original_mode: "text"      # text | link | none
   full_content_timeout_seconds: 20
+  lt_chunk_chars: 2000       # LibreTranslate chunk size (chars)
+  lt_timeout_seconds: 180    # LibreTranslate request timeout
 
 cache:
   sqlite_path: "data/cache.sqlite3"

@@ -57,6 +57,8 @@ class AppConfig:
     sqlite_path: str
     ttl_seconds: int
     image_dir: str
+    lt_chunk_chars: int
+    lt_timeout_seconds: int
     feeds: List[FeedConfig]
 
 
@@ -115,6 +117,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         sqlite_path=str(cache.get("sqlite_path", "data/cache.sqlite3")),
         ttl_seconds=int(cache.get("ttl_seconds", 60 * 60 * 24 * 30)),
         image_dir=str(cache.get("image_dir", "data/images")),
+        lt_chunk_chars=int(translation.get("lt_chunk_chars", 2000)),
+        lt_timeout_seconds=int(translation.get("lt_timeout_seconds", 180)),
         feeds=feeds_cfg,
     )
 
