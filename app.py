@@ -351,17 +351,64 @@ def clamp(text: str, max_chars: int) -> str:
     return text[: max_chars - 1] + "…"
 
 
-def _render_text_with_pre(text: str) -> str:
+def protect_breaks(text: str) -> str:
     if not text:
         return ""
+    text = text.replace("\r\n", "\n")
+    # Preserve paragraph and line breaks through translation.
+    text = text.replace("\n\n", "\n__PARA__\n")
+    text = text.replace("\n", "\n__LINE__\n")
+    return text
+
+
+def restore_breaks(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"\s*__PARA__\s*", "\n\n", text)
+    text = re.sub(r"\s*__LINE__\s*", "\n", text)
+    return text
+
+
+def protect_markers(text: str) -> Tuple[str, Dict[str, str]]:
+    if not text:
+        return "", {}
+    tokens: Dict[str, str] = {}
+
+    def repl(m: re.Match) -> str:
+        key = f"__MARKER_{len(tokens)}__"
+        tokens[key] = m.group(0)
+        return key
+
+    text = re.sub(r"\[\[\[(?:/)?PRE\]\]\]|\[\[\[IMG:.*?\]\]\]", repl, text)
+    return text, tokens
+
+
+def restore_markers(text: str, tokens: Dict[str, str]) -> str:
+    if not text or not tokens:
+        return text or ""
+    for key, val in tokens.items():
+        text = text.replace(key, val)
+    return text
+
+
+def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> str:
+    if not text:
+        return ""
+    heading_set = {h.strip() for h in (headings or []) if h and h.strip()}
     pre_start = "[[[PRE]]]"
     pre_end = "[[[/PRE]]]"
-    if pre_start not in text and "\n\n" not in text:
+    if pre_start not in text and "\n\n" not in text and "[[[IMG:" not in text:
         return html.escape(text)
 
-    parts = text.split(pre_start)
+    parts = re.split(r"(\[\[\[IMG:.*?\]\]\])", text)
     rendered: List[str] = []
     for part in parts:
+        if part.startswith("[[[IMG:") and part.endswith("]]]"):
+            src = part[len("[[[IMG:") : -3]
+            if src:
+                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
+            continue
+
         if pre_end in part:
             pre_body, rest = part.split(pre_end, 1)
             rendered.append("<pre>")
@@ -373,9 +420,19 @@ def _render_text_with_pre(text: str) -> str:
         if para_text:
             paras = [p for p in re.split(r"\n{2,}", para_text) if p.strip()]
             for p in paras:
-                rendered.append("<p>")
-                rendered.append(html.escape(p.strip()).replace("\n", "<br/>"))
-                rendered.append("</p>")
+                p = p.strip()
+                if p in heading_set:
+                    rendered.append("<h3>")
+                    rendered.append(html.escape(p))
+                    rendered.append("</h3>")
+                elif p.endswith(":") and len(p) <= 80 and "\n" not in p:
+                    rendered.append("<p><strong>")
+                    rendered.append(html.escape(p))
+                    rendered.append("</strong></p>")
+                else:
+                    rendered.append("<p>")
+                    rendered.append(html.escape(p).replace("\n", "<br/>"))
+                    rendered.append("</p>")
     return "\n".join(rendered).strip()
 
 
@@ -418,7 +475,9 @@ def build_translated_feed_xml(
 
         combined = ""
         if t_desc:
-            rendered_desc = _render_text_with_pre(t_desc)
+            rendered_desc = _render_text_with_pre(
+                t_desc, headings=feed_cfg.full_content_extract_sections
+            )
             combined += f"<p><strong>English</strong></p>\n{rendered_desc}\n"
         if CFG.original_mode == "text" and item_desc:
             combined += f"\n<hr/>\n<p><strong>Original</strong></p>\n{item_desc}\n"

@@ -21,7 +21,11 @@ from app import (
     feed_cache_put,
     pick_item_id,
     protect_iocs,
+    protect_breaks,
+    protect_markers,
     restore_iocs,
+    restore_breaks,
+    restore_markers,
     text_hash,
 )
 
@@ -96,6 +100,12 @@ def html_to_text(html: str) -> str:
         return ""
     # Strip script/style blocks first
     html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
+    # Preserve images as markers
+    html = re.sub(
+        r'(?is)<img[^>]*?src=["\']([^"\']+)["\'][^>]*>',
+        lambda m: f"\n[[[IMG:{m.group(1)}]]]\n",
+        html,
+    )
     parser = _TextExtractor()
     parser.feed(html)
     return parser.get_text()
@@ -244,8 +254,10 @@ def translate_feed(feed_cfg) -> int:
 
     entries = parsed.entries[: feed_cfg.item_limit]
 
-    to_translate: List[Tuple[int, str, str, str, Dict[str, str], Dict[str, str]]] = []
-    # (index, item_id, src_hash, cache_key, title_tokens, desc_tokens)
+    to_translate: List[
+        Tuple[int, str, str, str, Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]
+    ] = []
+    # (index, item_id, src_hash, cache_key, title_tokens, desc_tokens, title_markers, desc_markers)
 
     translated_title: Dict[int, str] = {}
     translated_desc: Dict[int, str] = {}
@@ -290,7 +302,15 @@ def translate_feed(feed_cfg) -> int:
             title_prot, title_tokens = title, {}
             desc_prot, desc_tokens = desc, {}
 
-        to_translate.append((idx, item_id, src_h, ckey, title_tokens, desc_tokens))
+        title_prot, title_markers = protect_markers(title_prot)
+        desc_prot, desc_markers = protect_markers(desc_prot)
+
+        title_prot = protect_breaks(title_prot)
+        desc_prot = protect_breaks(desc_prot)
+
+        to_translate.append(
+            (idx, item_id, src_h, ckey, title_tokens, desc_tokens, title_markers, desc_markers)
+        )
         translated_title[idx] = title_prot
         translated_desc[idx] = desc_prot
 
@@ -307,11 +327,24 @@ def translate_feed(feed_cfg) -> int:
             return 0
 
         written = 0
-        for j, (idx, item_id, src_h, ckey, title_tokens, desc_tokens) in enumerate(
+        for j, (
+            idx,
+            item_id,
+            src_h,
+            ckey,
+            title_tokens,
+            desc_tokens,
+            title_markers,
+            desc_markers,
+        ) in enumerate(
             to_translate
         ):
-            t_title = restore_iocs(titles_out[j], title_tokens)
-            t_desc = restore_iocs(descs_out[j], desc_tokens)
+            t_title = restore_breaks(titles_out[j])
+            t_desc = restore_breaks(descs_out[j])
+            t_title = restore_iocs(t_title, title_tokens)
+            t_desc = restore_iocs(t_desc, desc_tokens)
+            t_title = restore_markers(t_title, title_markers)
+            t_desc = restore_markers(t_desc, desc_markers)
 
             try:
                 cache_put(
