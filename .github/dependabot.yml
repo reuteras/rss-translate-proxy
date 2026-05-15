@@ -19,6 +19,6 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      actions-deps:
+      github-actions-deps:
         patterns:
           - "*"
