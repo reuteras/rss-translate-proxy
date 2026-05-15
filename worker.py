@@ -119,6 +119,7 @@ def html_to_text(html: str) -> str:
         return ""
     # Strip script/style blocks first
     html = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
+
     # Preserve images as markers; store data URIs to disk and emit URLs.
     def _img_repl(m: re.Match) -> str:
         src = m.group(1)
@@ -250,7 +251,10 @@ def fetch_full_text_via_api(feed_cfg, entry: Any) -> str:
         text = ""
         if feed_cfg.full_content_api_format == "xml":
             # Extract <tag>...</tag> content and unescape HTML entities.
-            tags = [t.strip() for t in (feed_cfg.full_content_api_text_path or "text").split(",")]
+            tags = [
+                t.strip()
+                for t in (feed_cfg.full_content_api_text_path or "text").split(",")
+            ]
             parts = []
             for tag in tags:
                 if not tag:
@@ -267,7 +271,10 @@ def fetch_full_text_via_api(feed_cfg, entry: Any) -> str:
             text = "\n\n".join(parts)
         else:
             data = r.json()
-            paths = [p.strip() for p in (feed_cfg.full_content_api_text_path or "").split(",")]
+            paths = [
+                p.strip()
+                for p in (feed_cfg.full_content_api_text_path or "").split(",")
+            ]
             parts = []
             for path in paths:
                 if not path:
@@ -329,7 +336,9 @@ def _lt_ready(timeout_seconds: int = 180) -> bool:
     return False
 
 
-def libretranslate_sync(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+def libretranslate_sync(
+    texts: List[str], source_lang: str, target_lang: str
+) -> List[str]:
     payload = {
         "q": texts,
         "source": source_lang or "auto",
@@ -429,7 +438,9 @@ def _chunk_text_bytes(text: str, limit_bytes: int, overhead: int = 400) -> List[
     return parts or [text]
 
 
-def _translate_with_chunking(texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+def _translate_with_chunking(
+    texts: List[str], source_lang: str, target_lang: str
+) -> List[str]:
     out: List[str] = []
     for t in texts:
         chunks = _chunk_text(t, CFG.lt_chunk_chars)
@@ -458,7 +469,6 @@ def _translate_with_chunking_deepl(texts: List[str], target_lang: str) -> List[s
             translated_chunks.extend(deepl_translate_sync([c], target_lang))
         out.append("\n\n".join(translated_chunks))
     return out
-    raise RuntimeError(f"Unknown translation provider: {provider}")
 
 
 def translate_feed(feed_cfg) -> int:
@@ -472,7 +482,16 @@ def translate_feed(feed_cfg) -> int:
     log(f"feed={feed_cfg.id} entries={len(entries)} item_limit={feed_cfg.item_limit}")
 
     to_translate: List[
-        Tuple[int, str, str, str, Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]
+        Tuple[
+            int,
+            str,
+            str,
+            str,
+            Dict[str, str],
+            Dict[str, str],
+            Dict[str, str],
+            Dict[str, str],
+        ]
     ] = []
     # (index, item_id, src_hash, cache_key, title_tokens, desc_tokens, title_markers, desc_markers)
 
@@ -496,7 +515,9 @@ def translate_feed(feed_cfg) -> int:
                 else:
                     full_text = fetch_full_text(str(link))
                 if full_text:
-                    log(f"feed={feed_cfg.id} full-content len={len(full_text)} id={item_id}")
+                    log(
+                        f"feed={feed_cfg.id} full-content len={len(full_text)} id={item_id}"
+                    )
                     desc = full_text
             except Exception as e:
                 log(f"feed={feed_cfg.id} full-content fetch failed: {e}")
@@ -533,25 +554,49 @@ def translate_feed(feed_cfg) -> int:
         desc_prot, desc_markers = protect_markers(desc_prot)
 
         to_translate.append(
-            (idx, item_id, src_h, ckey, title_tokens, desc_tokens, title_markers, desc_markers)
+            (
+                idx,
+                item_id,
+                src_h,
+                ckey,
+                title_tokens,
+                desc_tokens,
+                title_markers,
+                desc_markers,
+            )
         )
         translated_title[idx] = title_prot
         translated_desc[idx] = desc_prot
 
     if to_translate:
-        log(f"feed={feed_cfg.id} translate items={len(to_translate)} provider={CFG.translation_provider}")
+        log(
+            f"feed={feed_cfg.id} translate items={len(to_translate)} provider={CFG.translation_provider}"
+        )
         titles_out: List[str] = []
         descs_out: List[str] = []
 
-        for k, (idx, item_id, src_h, ckey, title_tokens, desc_tokens, title_markers, desc_markers) in enumerate(
-            to_translate, start=1
-        ):
-            log(f"feed={feed_cfg.id} translate item {k}/{len(to_translate)} id={item_id}")
+        for k, (
+            idx,
+            item_id,
+            src_h,
+            ckey,
+            title_tokens,
+            desc_tokens,
+            title_markers,
+            desc_markers,
+        ) in enumerate(to_translate, start=1):
+            log(
+                f"feed={feed_cfg.id} translate item {k}/{len(to_translate)} id={item_id}"
+            )
             max_attempts = 5
             for attempt in range(1, max_attempts + 1):
                 try:
-                    titles_out.extend(translate_sync([translated_title[idx]], CFG.target_lang))
-                    descs_out.extend(translate_sync([translated_desc[idx]], CFG.target_lang))
+                    titles_out.extend(
+                        translate_sync([translated_title[idx]], CFG.target_lang)
+                    )
+                    descs_out.extend(
+                        translate_sync([translated_desc[idx]], CFG.target_lang)
+                    )
                     break
                 except Exception as e:
                     msg = str(e)
@@ -583,9 +628,7 @@ def translate_feed(feed_cfg) -> int:
             desc_tokens,
             title_markers,
             desc_markers,
-        ) in enumerate(
-            to_translate
-        ):
+        ) in enumerate(to_translate):
             t_title = titles_out[j]
             t_desc = descs_out[j]
             t_title = restore_markers(t_title, title_markers)
