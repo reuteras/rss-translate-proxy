@@ -82,7 +82,10 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 source_url=str(fcfg["source_url"]).strip(),
                 item_limit=int(fcfg.get("item_limit", 30)),
                 fetch_full_content=bool(
-                    fcfg.get("fetch_full_content", translation.get("fetch_full_content", False))
+                    fcfg.get(
+                        "fetch_full_content",
+                        translation.get("fetch_full_content", False),
+                    )
                 ),
                 full_content_api_url_template=str(
                     fcfg.get("full_content_api_url_template", "")
@@ -90,12 +93,10 @@ def load_config(path: str = "config.yaml") -> AppConfig:
                 full_content_api_text_path=str(
                     fcfg.get("full_content_api_text_path", "")
                 ).strip(),
-                full_content_is_html=bool(
-                    fcfg.get("full_content_is_html", True)
-                ),
-                full_content_api_format=str(
-                    fcfg.get("full_content_api_format", "json")
-                ).strip().lower(),
+                full_content_is_html=bool(fcfg.get("full_content_is_html", True)),
+                full_content_api_format=str(fcfg.get("full_content_api_format", "json"))
+                .strip()
+                .lower(),
                 full_content_extract_sections=list(
                     fcfg.get("full_content_extract_sections", []) or []
                 ),
@@ -433,6 +434,7 @@ def protect_markers(text: str) -> Tuple[str, Dict[str, str]]:
 def restore_markers(text: str, tokens: Dict[str, str]) -> str:
     if not text or not tokens:
         return text or ""
+
     # Replace robustly even if translation has added spaces or underscores.
     def replace_marker(match: re.Match) -> str:
         idx = match.group(1)
@@ -525,9 +527,9 @@ def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> st
             if name:
                 base = CFG.base_url or ""
                 url = f"{base}/images/{name}" if base else f"/images/{name}"
-                rendered.append(f"<img src=\"{html.escape(url)}\"/>")
+                rendered.append(f'<img src="{html.escape(url)}"/>')
             elif src:
-                rendered.append(f"<img src=\"{html.escape(src)}\"/>")
+                rendered.append(f'<img src="{html.escape(src)}"/>')
             i = next_pos + m.end(0)
 
     return "\n".join(rendered).strip()
@@ -561,7 +563,12 @@ def build_translated_feed_xml(
         fe = fg.add_entry()
         fe.id(pick_item_id(entry))
 
-        link = item_link or getattr(entry, "link", None) or entry.get("link") or feed_cfg.source_url
+        link = (
+            item_link
+            or getattr(entry, "link", None)
+            or entry.get("link")
+            or feed_cfg.source_url
+        )
         fe.link(href=str(link))
 
         pub = getattr(entry, "published_parsed", None) or entry.get("published_parsed")
@@ -581,7 +588,7 @@ def build_translated_feed_xml(
         elif CFG.original_mode == "link" and link:
             combined += (
                 f"\n<hr/>\n<p><strong>Original</strong></p>\n"
-                f"<p><a href=\"{link}\">{link}</a></p>\n"
+                f'<p><a href="{link}">{link}</a></p>\n'
             )
         fe.description(combined or t_desc or "")
 

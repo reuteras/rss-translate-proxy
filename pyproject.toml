@@ -12,3 +12,8 @@ dependencies = [
   "feedparser",
   "feedgen",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.13",
+]
