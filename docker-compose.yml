@@ -23,7 +23,7 @@ services:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
   libretranslate:
-    image: libretranslate/libretranslate:latest
+    image: docker.io/libretranslate/libretranslate:latest
     container_name: rss-translate-libretranslate
     labels:
       - com.monitoring.enable=true
