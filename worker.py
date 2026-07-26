@@ -4,11 +4,11 @@ import html
 import os
 import re
 import time
-from typing import Any, Dict, List, Tuple
+from html.parser import HTMLParser
+from typing import Any, ClassVar
 
 import feedparser
 import httpx
-from html.parser import HTMLParser
 
 from app import (
     CFG,
@@ -16,20 +16,20 @@ from app import (
     DEEPL_ENDPOINT,
     LIBRETRANSLATE_API_KEY,
     LIBRETRANSLATE_ENDPOINT,
+    build_translated_feed_xml,
     cache_get,
     cache_key_for_item,
-    cache_put,
     cache_purge_old,
-    build_translated_feed_xml,
+    cache_put,
     clamp,
     entry_text,
     feed_cache_put,
     pick_item_id,
-    protect_iocs,
     protect_breaks,
+    protect_iocs,
     protect_markers,
-    restore_iocs,
     restore_breaks,
+    restore_iocs,
     restore_markers,
     text_hash,
 )
@@ -55,7 +55,7 @@ def log_once(msg: str) -> None:
 
 
 class _TextExtractor(HTMLParser):
-    _BLOCK_TAGS = {
+    _BLOCK_TAGS: ClassVar[set[str]] = {
         "p",
         "div",
         "br",
@@ -73,10 +73,10 @@ class _TextExtractor(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__()
-        self._parts: List[str] = []
+        self._parts: list[str] = []
         self._in_pre = False
 
-    def handle_starttag(self, tag: str, attrs: List[Tuple[str, str]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
         if tag == "pre":
             self._in_pre = True
             self._newline()
@@ -147,7 +147,7 @@ def store_data_image(data_uri: str) -> str:
     b64 = m.group(2)
     try:
         data = base64.b64decode(b64)
-    except Exception:
+    except ValueError:
         return ""
     ext = {
         "image/png": ".png",
@@ -167,7 +167,7 @@ def store_data_image(data_uri: str) -> str:
     return name
 
 
-def extract_sections(text: str, headings: List[str]) -> str:
+def extract_sections(text: str, headings: list[str]) -> str:
     if not text or not headings:
         return text or ""
     want = {h.strip() for h in headings if h and h.strip()}
@@ -175,9 +175,9 @@ def extract_sections(text: str, headings: List[str]) -> str:
         return text
 
     lines = [ln.strip() for ln in text.splitlines()]
-    sections: List[str] = []
+    sections: list[str] = []
     cur_heading = None
-    cur_lines: List[str] = []
+    cur_lines: list[str] = []
 
     def flush() -> None:
         if cur_heading and cur_lines:
@@ -291,7 +291,7 @@ def fetch_full_text_via_api(feed_cfg, entry: Any) -> str:
         return str(text)
 
 
-def deepl_translate_sync(texts: List[str], target_lang: str) -> List[str]:
+def deepl_translate_sync(texts: list[str], target_lang: str) -> list[str]:
     if not DEEPL_API_KEY:
         raise RuntimeError("DEEPL_API_KEY not set")
 
@@ -330,15 +330,15 @@ def _lt_ready(timeout_seconds: int = 180) -> bool:
                 r = client.get(url)
             if r.status_code == 200:
                 return True
-        except Exception:
+        except httpx.HTTPError:
             pass
         time.sleep(2)
     return False
 
 
 def libretranslate_sync(
-    texts: List[str], source_lang: str, target_lang: str
-) -> List[str]:
+    texts: list[str], source_lang: str, target_lang: str
+) -> list[str]:
     payload = {
         "q": texts,
         "source": source_lang or "auto",
@@ -363,7 +363,7 @@ def libretranslate_sync(
         raise RuntimeError("LibreTranslate response missing translatedText")
 
 
-def translate_sync(texts: List[str], target_lang: str) -> List[str]:
+def translate_sync(texts: list[str], target_lang: str) -> list[str]:
     provider = (CFG.translation_provider or "deepl").lower()
     if provider == "deepl":
         try:
@@ -391,11 +391,11 @@ def translate_sync(texts: List[str], target_lang: str) -> List[str]:
     return _translate_with_chunking(texts, lt_source, lt_target)
 
 
-def _chunk_text(text: str, limit: int) -> List[str]:
+def _chunk_text(text: str, limit: int) -> list[str]:
     if not text:
         return [""]
-    parts: List[str] = []
-    buf: List[str] = []
+    parts: list[str] = []
+    buf: list[str] = []
     size = 0
     for para in re.split(r"\n{2,}", text):
         p = para.strip()
@@ -414,18 +414,18 @@ def _chunk_text(text: str, limit: int) -> List[str]:
     return parts or [text]
 
 
-def _chunk_text_bytes(text: str, limit_bytes: int, overhead: int = 400) -> List[str]:
+def _chunk_text_bytes(text: str, limit_bytes: int, overhead: int = 400) -> list[str]:
     if not text:
         return [""]
-    parts: List[str] = []
-    buf: List[str] = []
+    parts: list[str] = []
+    buf: list[str] = []
     size = overhead
 
     for para in re.split(r"\n{2,}", text):
         p = para.strip()
         if not p:
             continue
-        add = len(p.encode("utf-8")) + len("\n\n".encode("utf-8"))
+        add = len(p.encode("utf-8")) + len(b"\n\n")
         if size + add > limit_bytes and buf:
             parts.append("\n\n".join(buf))
             buf = [p]
@@ -439,15 +439,15 @@ def _chunk_text_bytes(text: str, limit_bytes: int, overhead: int = 400) -> List[
 
 
 def _translate_with_chunking(
-    texts: List[str], source_lang: str, target_lang: str
-) -> List[str]:
-    out: List[str] = []
+    texts: list[str], source_lang: str, target_lang: str
+) -> list[str]:
+    out: list[str] = []
     for t in texts:
         chunks = _chunk_text(t, CFG.lt_chunk_chars)
         if len(chunks) == 1:
             out.extend(libretranslate_sync([t], source_lang, target_lang))
             continue
-        translated_chunks: List[str] = []
+        translated_chunks: list[str] = []
         for i, c in enumerate(chunks, start=1):
             log(f"libretranslate chunk {i}/{len(chunks)} len={len(c)}")
             translated_chunks.extend(libretranslate_sync([c], source_lang, target_lang))
@@ -455,15 +455,15 @@ def _translate_with_chunking(
     return out
 
 
-def _translate_with_chunking_deepl(texts: List[str], target_lang: str) -> List[str]:
-    out: List[str] = []
+def _translate_with_chunking_deepl(texts: list[str], target_lang: str) -> list[str]:
+    out: list[str] = []
     for t in texts:
         # DeepL request limit is 128KiB; keep a safe byte budget
         chunks = _chunk_text_bytes(t, limit_bytes=CFG.deepl_chunk_bytes)
         if len(chunks) == 1:
             out.extend(deepl_translate_sync([t], target_lang))
             continue
-        translated_chunks: List[str] = []
+        translated_chunks: list[str] = []
         for i, c in enumerate(chunks, start=1):
             log(f"deepl chunk {i}/{len(chunks)} len={len(c)}")
             translated_chunks.extend(deepl_translate_sync([c], target_lang))
@@ -481,27 +481,27 @@ def translate_feed(feed_cfg) -> int:
     entries = parsed.entries[: feed_cfg.item_limit]
     log(f"feed={feed_cfg.id} entries={len(entries)} item_limit={feed_cfg.item_limit}")
 
-    to_translate: List[
-        Tuple[
+    to_translate: list[
+        tuple[
             int,
             str,
             str,
             str,
-            Dict[str, str],
-            Dict[str, str],
-            Dict[str, str],
-            Dict[str, str],
+            dict[str, str],
+            dict[str, str],
+            dict[str, str],
+            dict[str, str],
         ]
     ] = []
     # (index, item_id, src_hash, cache_key, title_tokens, desc_tokens, title_markers, desc_markers)
 
-    translated_title: Dict[int, str] = {}
-    translated_desc: Dict[int, str] = {}
-    original_title: Dict[int, str] = {}
-    original_desc: Dict[int, str] = {}
-    original_link: Dict[int, str] = {}
-    clamped_title: Dict[int, str] = {}
-    clamped_desc: Dict[int, str] = {}
+    translated_title: dict[int, str] = {}
+    translated_desc: dict[int, str] = {}
+    original_title: dict[int, str] = {}
+    original_desc: dict[int, str] = {}
+    original_link: dict[int, str] = {}
+    clamped_title: dict[int, str] = {}
+    clamped_desc: dict[int, str] = {}
 
     for idx, entry in enumerate(entries):
         item_id = pick_item_id(entry)
@@ -519,7 +519,7 @@ def translate_feed(feed_cfg) -> int:
                         f"feed={feed_cfg.id} full-content len={len(full_text)} id={item_id}"
                     )
                     desc = full_text
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - best-effort fetch, log and keep going
                 log(f"feed={feed_cfg.id} full-content fetch failed: {e}")
 
         original_title[idx] = title
@@ -572,8 +572,8 @@ def translate_feed(feed_cfg) -> int:
         log(
             f"feed={feed_cfg.id} translate items={len(to_translate)} provider={CFG.translation_provider}"
         )
-        titles_out: List[str] = []
-        descs_out: List[str] = []
+        titles_out: list[str] = []
+        descs_out: list[str] = []
 
         for k, (
             idx,
@@ -598,7 +598,7 @@ def translate_feed(feed_cfg) -> int:
                         translate_sync([translated_desc[idx]], CFG.target_lang)
                     )
                     break
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - error type varies by provider
                     msg = str(e)
                     retryable = any(
                         frag in msg
@@ -649,7 +649,7 @@ def translate_feed(feed_cfg) -> int:
                     translated_desc=t_desc,
                 )
                 written += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad write shouldn't abort the run
                 log(f"feed={feed_cfg.id} cache write failed: {e}")
     else:
         written = 0
@@ -694,7 +694,7 @@ def run_once() -> None:
     if CFG.cache_purge_enabled:
         try:
             cache_purge_old(CFG.sqlite_path, CFG.ttl_seconds)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - opportunistic purge, don't abort the run
             log(f"cache purge failed: {e}")
     else:
         log("cache purge disabled")

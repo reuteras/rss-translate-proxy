@@ -1,16 +1,16 @@
 import hashlib
 import html
+import mimetypes
 import os
 import re
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
-import mimetypes
 import yaml
-from fastapi import FastAPI, HTTPException, Response, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from feedgen.feed import FeedGenerator
 
@@ -37,7 +37,7 @@ class FeedConfig:
     full_content_api_text_path: str = ""
     full_content_is_html: bool = True
     full_content_api_format: str = "json"
-    full_content_extract_sections: List[str] = None
+    full_content_extract_sections: list[str] = None
 
 
 @dataclass
@@ -62,7 +62,7 @@ class AppConfig:
     lt_timeout_seconds: int
     deepl_chunk_bytes: int
     render_version: str
-    feeds: List[FeedConfig]
+    feeds: list[FeedConfig]
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
@@ -173,7 +173,7 @@ def ensure_db(path: str) -> None:
         con.commit()
 
 
-def cache_get(path: str, cache_key: str) -> Optional[Dict[str, Any]]:
+def cache_get(path: str, cache_key: str) -> dict[str, Any] | None:
     with sqlite3.connect(path) as con:
         con.row_factory = sqlite3.Row
         row = con.execute(
@@ -212,7 +212,7 @@ def cache_put(
         con.commit()
 
 
-def feed_cache_get(path: str, feed_id: str) -> Optional[str]:
+def feed_cache_get(path: str, feed_id: str) -> str | None:
     cache_id = f"{feed_id}|{CFG.render_version}"
     with sqlite3.connect(path) as con:
         row = con.execute(
@@ -264,12 +264,12 @@ IOC_PATTERNS = [
 ]
 
 
-def protect_iocs(text: str) -> Tuple[str, Dict[str, str]]:
+def protect_iocs(text: str) -> tuple[str, dict[str, str]]:
     """
     Replace IOCs with tokens so translation engines are less likely to mangle them.
     Returns protected_text, token_map.
     """
-    token_map: Dict[str, str] = {}
+    token_map: dict[str, str] = {}
     if not text:
         return text, token_map
 
@@ -287,7 +287,7 @@ def protect_iocs(text: str) -> Tuple[str, Dict[str, str]]:
     return combined.sub(repl, text), token_map
 
 
-def restore_iocs(text: str, token_map: Dict[str, str]) -> str:
+def restore_iocs(text: str, token_map: dict[str, str]) -> str:
     if not text or not token_map:
         return text
     for token, original in token_map.items():
@@ -298,7 +298,7 @@ def restore_iocs(text: str, token_map: Dict[str, str]) -> str:
 # ----------------------------
 # DeepL client
 # ----------------------------
-async def deepl_translate(texts: List[str], target_lang: str) -> List[str]:
+async def deepl_translate(texts: list[str], target_lang: str) -> list[str]:
     if not DEEPL_API_KEY:
         raise RuntimeError("DEEPL_API_KEY not set")
 
@@ -335,7 +335,7 @@ def cache_key_for_item(
     feed_id: str, guid_or_link: str, src_hash: str, target_lang: str
 ) -> str:
     return hashlib.sha256(
-        f"{feed_id}|{guid_or_link}|{src_hash}|{target_lang}".encode("utf-8")
+        f"{feed_id}|{guid_or_link}|{src_hash}|{target_lang}".encode()
     ).hexdigest()
 
 
@@ -350,7 +350,7 @@ def pick_item_id(entry: Any) -> str:
     return f"{title}|{published}"
 
 
-def entry_text(entry: Any) -> Tuple[str, str]:
+def entry_text(entry: Any) -> tuple[str, str]:
     title = (getattr(entry, "title", "") or entry.get("title", "") or "").strip()
 
     # Prefer summary/description
@@ -362,7 +362,7 @@ def entry_text(entry: Any) -> Tuple[str, str]:
     if not desc and entry.get("content"):
         try:
             desc = (entry["content"][0].get("value") or "").strip()
-        except Exception:
+        except (KeyError, IndexError, AttributeError, TypeError):
             pass
 
     # Unescape HTML entities but keep HTML tags intact (RSS readers can render)
@@ -398,10 +398,10 @@ def restore_breaks(text: str) -> str:
     return text
 
 
-def protect_markers(text: str) -> Tuple[str, Dict[str, str]]:
+def protect_markers(text: str) -> tuple[str, dict[str, str]]:
     if not text:
         return "", {}
-    tokens: Dict[str, str] = {}
+    tokens: dict[str, str] = {}
 
     def make_token() -> str:
         return f"ZZZMARKER{len(tokens)}ZZZ"
@@ -431,7 +431,7 @@ def protect_markers(text: str) -> Tuple[str, Dict[str, str]]:
     return text, tokens
 
 
-def restore_markers(text: str, tokens: Dict[str, str]) -> str:
+def restore_markers(text: str, tokens: dict[str, str]) -> str:
     if not text or not tokens:
         return text or ""
 
@@ -458,14 +458,14 @@ def restore_markers(text: str, tokens: Dict[str, str]) -> str:
     return text
 
 
-def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> str:
+def _render_text_with_pre(text: str, headings: list[str] | None = None) -> str:
     if not text:
         return ""
     heading_set = {h.strip() for h in (headings or []) if h and h.strip()}
     pre_start = "[[[PRE]]]"
     pre_end = "[[[/PRE]]]"
 
-    def render_nonpre(chunk: str, out: List[str]) -> None:
+    def render_nonpre(chunk: str, out: list[str]) -> None:
         if not chunk:
             return
         chunk = chunk.replace(pre_start, "").replace(pre_end, "")
@@ -486,7 +486,7 @@ def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> st
             out.append(html.escape(p).replace("\n", "<br/>"))
             out.append("</p>")
 
-    rendered: List[str] = []
+    rendered: list[str] = []
     i = 0
     while i < len(text):
         next_pre = text.find(pre_start, i)
@@ -537,12 +537,12 @@ def _render_text_with_pre(text: str, headings: Optional[List[str]] = None) -> st
 
 def build_translated_feed_xml(
     feed_cfg: FeedConfig,
-    entries: List[Any],
-    translated_title: Dict[int, str],
-    translated_desc: Dict[int, str],
-    original_title: Dict[int, str],
-    original_desc: Dict[int, str],
-    original_link: Dict[int, str],
+    entries: list[Any],
+    translated_title: dict[int, str],
+    translated_desc: dict[int, str],
+    original_title: dict[int, str],
+    original_desc: dict[int, str],
+    original_link: dict[int, str],
 ) -> bytes:
     fg = FeedGenerator()
     fg.title(feed_cfg.name)
