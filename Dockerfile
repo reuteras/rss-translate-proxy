@@ -1,9 +1,9 @@
 FROM python:3.14-slim
 
 WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv==0.11.14 \
-  && uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
