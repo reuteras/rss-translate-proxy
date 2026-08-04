@@ -37,7 +37,7 @@ class FeedConfig:
     full_content_api_text_path: str = ""
     full_content_is_html: bool = True
     full_content_api_format: str = "json"
-    full_content_extract_sections: list[str] = None
+    full_content_extract_sections: list[str] | None = None
 
 
 @dataclass
