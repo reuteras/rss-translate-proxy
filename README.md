@@ -9,11 +9,13 @@ with the original text kept alongside the translation.
 
 - **`worker.py`** polls the configured source feeds on an interval, optionally
   fetches full article content, translates new/changed items, and caches
-  both the translation and the rendered feed XML in SQLite
-  (`data/cache.sqlite3`).
+  the rendered feed XML, an HTML entry list, and one HTML page per entry in
+  SQLite (`data/cache.sqlite3`).
 - **`app.py`** is a FastAPI app that serves the cached feed XML at
-  `/feeds/<id>.xml` and extracted images at `/images/<name>`. It never calls
-  the translation API itself — it only reads what the worker has cached.
+  `/feeds/<id>.xml`, a human-readable list of the same entries at
+  `/feeds/<id>` (each linking to its own page at `/feeds/<id>/<entry_id>`),
+  and extracted images at `/images/<name>`. It never calls the translation
+  API itself — it only reads what the worker has cached.
 - Two processes are meant to run side by side (see `docker-compose.yml`):
   the web app and the worker.
 
@@ -80,6 +82,11 @@ uv run python worker.py
 - `GET /` — service info and list of available feeds.
 - `GET /healthz` — health check.
 - `GET /feeds/{feed_id}.xml` — translated RSS feed for the given feed id.
+- `GET /feeds/{feed_id}` — browser-readable list of the feed's translated
+  entries. Each entry's title still links to the original article; a
+  separate link opens that entry's own local page.
+- `GET /feeds/{feed_id}/{entry_id}` — a single translated entry (translation
+  plus original, per `original_mode`) on its own page.
 - `GET /images/{name}` — locally cached images extracted from feed content.
 
 ## Development

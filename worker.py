@@ -16,12 +16,17 @@ from app import (
     DEEPL_ENDPOINT,
     LIBRETRANSLATE_API_KEY,
     LIBRETRANSLATE_ENDPOINT,
+    _render_text_with_pre,
+    build_entry_detail_html,
+    build_feed_index_html,
     build_translated_feed_xml,
     cache_get,
     cache_key_for_item,
     cache_purge_old,
     cache_put,
     clamp,
+    entry_cache_put,
+    entry_slug,
     entry_text,
     feed_cache_put,
     pick_item_id,
@@ -502,9 +507,11 @@ def translate_feed(feed_cfg) -> int:
     original_link: dict[int, str] = {}
     clamped_title: dict[int, str] = {}
     clamped_desc: dict[int, str] = {}
+    item_ids: dict[int, str] = {}
 
     for idx, entry in enumerate(entries):
         item_id = pick_item_id(entry)
+        item_ids[idx] = item_id
         title, desc = entry_text(entry)
         link = getattr(entry, "link", None) or entry.get("link") or ""
 
@@ -671,6 +678,17 @@ def translate_feed(feed_cfg) -> int:
         translated_title[idx] = cached.get("translated_title") or ""
         translated_desc[idx] = cached.get("translated_desc") or ""
 
+    # Original text may still contain raw HTML from the source feed; render it
+    # through the same escaping pipeline used for translated text so the HTML
+    # page never embeds untrusted markup directly.
+    original_desc_html: dict[int, str] = {}
+    for idx in translated_title:
+        raw = original_desc.get(idx, "")
+        if raw:
+            original_desc_html[idx] = _render_text_with_pre(html_to_text(raw))
+
+    entry_slugs = {idx: entry_slug(item_ids[idx]) for idx in translated_title}
+
     xml_bytes = build_translated_feed_xml(
         feed_cfg,
         entries,
@@ -680,7 +698,30 @@ def translate_feed(feed_cfg) -> int:
         original_desc,
         original_link,
     )
-    feed_cache_put(CFG.sqlite_path, feed_cfg.id, xml_bytes.decode("utf-8"))
+    index_html = build_feed_index_html(
+        feed_cfg,
+        entries,
+        translated_title,
+        translated_desc,
+        original_title,
+        original_link,
+        entry_slugs,
+    )
+    feed_cache_put(CFG.sqlite_path, feed_cfg.id, xml_bytes.decode("utf-8"), index_html)
+
+    for idx, slug in entry_slugs.items():
+        link = original_link.get(idx, "") or (
+            getattr(entries[idx], "link", None) or entries[idx].get("link") or ""
+        )
+        entry_html = build_entry_detail_html(
+            feed_cfg,
+            translated_title.get(idx, ""),
+            translated_desc.get(idx, ""),
+            original_title.get(idx, ""),
+            original_desc_html.get(idx, ""),
+            str(link),
+        )
+        entry_cache_put(CFG.sqlite_path, feed_cfg.id, slug, entry_html)
 
     return written
 

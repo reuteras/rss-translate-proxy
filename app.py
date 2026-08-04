@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -163,12 +162,32 @@ def ensure_db(path: str) -> None:
             CREATE TABLE IF NOT EXISTS feed_cache (
                 feed_id TEXT PRIMARY KEY,
                 updated_at INTEGER NOT NULL,
-                xml TEXT NOT NULL
+                xml TEXT NOT NULL,
+                html TEXT
+            )
+            """
+        )
+        existing_cols = {
+            row[1] for row in con.execute("PRAGMA table_info(feed_cache)").fetchall()
+        }
+        if "html" not in existing_cols:
+            con.execute("ALTER TABLE feed_cache ADD COLUMN html TEXT")
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_cache (
+                feed_id TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                html TEXT NOT NULL,
+                PRIMARY KEY (feed_id, slug)
             )
             """
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_created_at ON translations(created_at)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entry_updated_at ON entry_cache(updated_at)"
         )
         con.commit()
 
@@ -221,16 +240,49 @@ def feed_cache_get(path: str, feed_id: str) -> str | None:
         return row[0] if row else None
 
 
-def feed_cache_put(path: str, feed_id: str, xml: str) -> None:
+def feed_cache_get_html(path: str, feed_id: str) -> str | None:
+    cache_id = f"{feed_id}|{CFG.render_version}"
+    with sqlite3.connect(path) as con:
+        row = con.execute(
+            "SELECT html FROM feed_cache WHERE feed_id = ?", (cache_id,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+
+def feed_cache_put(path: str, feed_id: str, xml: str, html_content: str) -> None:
     now = int(time.time())
     cache_id = f"{feed_id}|{CFG.render_version}"
     with sqlite3.connect(path) as con:
         con.execute(
             """
-            INSERT OR REPLACE INTO feed_cache (feed_id, updated_at, xml)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO feed_cache (feed_id, updated_at, xml, html)
+            VALUES (?, ?, ?, ?)
             """,
-            (cache_id, now, xml),
+            (cache_id, now, xml, html_content),
+        )
+        con.commit()
+
+
+def entry_cache_get_html(path: str, feed_id: str, slug: str) -> str | None:
+    cache_id = f"{feed_id}|{CFG.render_version}"
+    with sqlite3.connect(path) as con:
+        row = con.execute(
+            "SELECT html FROM entry_cache WHERE feed_id = ? AND slug = ?",
+            (cache_id, slug),
+        ).fetchone()
+        return row[0] if row else None
+
+
+def entry_cache_put(path: str, feed_id: str, slug: str, html_content: str) -> None:
+    now = int(time.time())
+    cache_id = f"{feed_id}|{CFG.render_version}"
+    with sqlite3.connect(path) as con:
+        con.execute(
+            """
+            INSERT OR REPLACE INTO entry_cache (feed_id, slug, updated_at, html)
+            VALUES (?, ?, ?, ?)
+            """,
+            (cache_id, slug, now, html_content),
         )
         con.commit()
 
@@ -239,6 +291,7 @@ def cache_purge_old(path: str, ttl_seconds: int) -> None:
     cutoff = int(time.time()) - ttl_seconds
     with sqlite3.connect(path) as con:
         con.execute("DELETE FROM translations WHERE created_at < ?", (cutoff,))
+        con.execute("DELETE FROM entry_cache WHERE updated_at < ?", (cutoff,))
         con.commit()
 
 
@@ -296,31 +349,6 @@ def restore_iocs(text: str, token_map: dict[str, str]) -> str:
 
 
 # ----------------------------
-# DeepL client
-# ----------------------------
-async def deepl_translate(texts: list[str], target_lang: str) -> list[str]:
-    if not DEEPL_API_KEY:
-        raise RuntimeError("DEEPL_API_KEY not set")
-
-    # DeepL supports sending multiple "text" fields
-    data = []
-    for t in texts:
-        data.append(("text", t))
-    data.append(("target_lang", target_lang))
-
-    headers = {"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"}
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(DEEPL_ENDPOINT, data=data, headers=headers)
-        if r.status_code != 200:
-            raise RuntimeError(f"DeepL error {r.status_code}: {r.text}")
-
-        payload = r.json()
-        translations = payload.get("translations", [])
-        return [tr.get("text", "") for tr in translations]
-
-
-# ----------------------------
 # RSS -> RSS
 # ----------------------------
 def text_hash(*parts: str) -> str:
@@ -337,6 +365,15 @@ def cache_key_for_item(
     return hashlib.sha256(
         f"{feed_id}|{guid_or_link}|{src_hash}|{target_lang}".encode()
     ).hexdigest()
+
+
+ENTRY_SLUG_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+def entry_slug(item_id: str) -> str:
+    return hashlib.sha256(
+        (item_id or "").encode("utf-8", errors="ignore")
+    ).hexdigest()[:16]
 
 
 def pick_item_id(entry: Any) -> str:
@@ -595,6 +632,156 @@ def build_translated_feed_xml(
     return fg.rss_str(pretty=True)
 
 
+_EXCERPT_STRIP_RE = re.compile(
+    r"\[\[\[/?PRE\]\]\]|\[\[\[IMGURL:.*?\]\]\]|\[\[\[IMG:.*?\]\]\]"
+)
+
+_HTML_PAGE_STYLE = (
+    "<style>"
+    "body{max-width:800px;margin:2rem auto;padding:0 1rem;"
+    "font-family:system-ui,sans-serif;line-height:1.5;color:#222;}"
+    "article{margin-bottom:2.5rem;padding-bottom:2rem;border-bottom:1px solid #ddd;}"
+    "h1{font-size:1.4rem;} h1 a{color:inherit;}"
+    "h2{font-size:1.15rem;margin-bottom:.25rem;}"
+    "h2 a{color:inherit;text-decoration:none;} h2 a:hover{text-decoration:underline;}"
+    "pre{white-space:pre-wrap;background:#f5f5f5;padding:.5rem;overflow-x:auto;}"
+    "img{max-width:100%;height:auto;}"
+    ".original{color:#555;}"
+    ".excerpt{color:#444;}"
+    ".links{font-size:.85rem;}"
+    ".label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;"
+    "color:#888;margin:1rem 0 .25rem;}"
+    "</style>"
+)
+
+
+def _plain_excerpt(text: str, max_chars: int = 220) -> str:
+    if not text:
+        return ""
+    stripped = _EXCERPT_STRIP_RE.sub(" ", text)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return clamp(stripped, max_chars)
+
+
+def _html_document(title: str, body_parts: list[str]) -> str:
+    parts: list[str] = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8"/>',
+        '<meta name="viewport" content="width=device-width, initial-scale=1"/>',
+        f"<title>{html.escape(title)}</title>",
+        _HTML_PAGE_STYLE,
+        "</head>",
+        "<body>",
+        *body_parts,
+        "</body></html>",
+    ]
+    return "\n".join(parts)
+
+
+def build_feed_index_html(
+    feed_cfg: FeedConfig,
+    entries: list[Any],
+    translated_title: dict[int, str],
+    translated_desc: dict[int, str],
+    original_title: dict[int, str],
+    original_link: dict[int, str],
+    entry_slugs: dict[int, str],
+) -> str:
+    """Render the feed's translated entries as a browsable list page.
+
+    Each entry's title still links to the original article; a separate link
+    points at that entry's own locally cached page (/feeds/{id}/{slug}).
+    """
+    body: list[str] = [
+        f"<h1>{html.escape(feed_cfg.name)}</h1>",
+        (
+            f'<p><a href="{html.escape(feed_cfg.source_url)}">source</a>'
+            f' &middot; <a href="/feeds/{html.escape(feed_cfg.id)}.xml">RSS</a></p>'
+        ),
+    ]
+
+    shown = 0
+    for idx, entry in enumerate(entries):
+        t_title = translated_title.get(idx, "")
+        t_desc = translated_desc.get(idx, "")
+        slug = entry_slugs.get(idx, "")
+        if (not t_title and not t_desc) or not slug:
+            continue
+        shown += 1
+
+        item_title = original_title.get(idx, "")
+        link = (
+            original_link.get(idx, "")
+            or getattr(entry, "link", None)
+            or entry.get("link")
+            or feed_cfg.source_url
+        )
+        excerpt = _plain_excerpt(t_desc)
+
+        body.append("<article>")
+        body.append(
+            f'<h2><a href="{html.escape(str(link))}">'
+            f"{html.escape(t_title or item_title)}</a></h2>"
+        )
+        if excerpt:
+            body.append(f'<p class="excerpt">{html.escape(excerpt)}</p>')
+        body.append(
+            '<p class="links">'
+            f'<a href="/feeds/{html.escape(feed_cfg.id)}/{slug}">'
+            "Translated entry &rarr;</a></p>"
+        )
+        body.append("</article>")
+
+    if shown == 0:
+        body.append("<p>No translated entries yet.</p>")
+
+    return _html_document(feed_cfg.name, body)
+
+
+def build_entry_detail_html(
+    feed_cfg: FeedConfig,
+    t_title: str,
+    t_desc: str,
+    item_title: str,
+    original_desc_html: str,
+    link: str,
+) -> str:
+    """Render a single translated entry as its own page.
+
+    original_desc_html must already be safely escaped/rendered HTML -- this
+    function does not sanitize it.
+    """
+    title = t_title or item_title
+    body: list[str] = [
+        f'<p><a href="/feeds/{html.escape(feed_cfg.id)}">&larr; {html.escape(feed_cfg.name)}</a></p>',
+        "<article>",
+        f'<h1><a href="{html.escape(str(link))}">{html.escape(title)}</a></h1>',
+    ]
+    if t_desc:
+        body.append(
+            _render_text_with_pre(
+                t_desc, headings=feed_cfg.full_content_extract_sections
+            )
+        )
+
+    if CFG.original_mode == "text" and original_desc_html:
+        body.append('<p class="label">Original</p>')
+        body.append(f'<div class="original">{original_desc_html}</div>')
+    elif CFG.original_mode == "link" and link:
+        escaped_link = html.escape(str(link))
+        body.append(
+            f'<p class="label">Original</p>'
+            f'<p><a href="{escaped_link}">{escaped_link}</a></p>'
+        )
+    body.append("</article>")
+
+    return _html_document(title or feed_cfg.name, body)
+
+
+CSP_HEADER = "default-src 'none'; img-src * data:; style-src 'unsafe-inline'"
+
 app = FastAPI(title="RSS Translate Proxy", version="1.0.0")
 
 
@@ -619,6 +806,7 @@ def root():
     return {
         "service": "rss-translate-proxy",
         "feeds": [f"/feeds/{f.id}.xml" for f in CFG.feeds],
+        "feeds_html": [f"/feeds/{f.id}" for f in CFG.feeds],
         "health": "/healthz",
     }
 
@@ -656,3 +844,41 @@ async def translated_feed(feed_id: str):
         _log(f"feed_cache hit feed_id={feed_id} bytes={len(xml)}")
         xml_bytes = xml.encode("utf-8")
     return Response(content=xml_bytes, media_type="application/rss+xml; charset=utf-8")
+
+
+@app.get("/feeds/{feed_id}")
+async def translated_feed_html(feed_id: str):
+    feed_cfg = next((f for f in CFG.feeds if f.id == feed_id), None)
+    if not feed_cfg:
+        raise HTTPException(status_code=404, detail="Unknown feed_id")
+
+    html_content = feed_cache_get_html(CFG.sqlite_path, feed_id)
+    if html_content is None:
+        _log(f"feed_cache_html miss feed_id={feed_id}")
+        html_content = build_feed_index_html(feed_cfg, [], {}, {}, {}, {}, {})
+    else:
+        _log(f"feed_cache_html hit feed_id={feed_id} bytes={len(html_content)}")
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Security-Policy": CSP_HEADER},
+    )
+
+
+@app.get("/feeds/{feed_id}/{slug}")
+async def translated_entry_html(feed_id: str, slug: str):
+    feed_cfg = next((f for f in CFG.feeds if f.id == feed_id), None)
+    if not feed_cfg:
+        raise HTTPException(status_code=404, detail="Unknown feed_id")
+    if not ENTRY_SLUG_RE.fullmatch(slug):
+        raise HTTPException(status_code=404, detail="Unknown entry")
+
+    html_content = entry_cache_get_html(CFG.sqlite_path, feed_id, slug)
+    if html_content is None:
+        raise HTTPException(status_code=404, detail="Unknown entry")
+    _log(f"entry_cache_html hit feed_id={feed_id} slug={slug}")
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Security-Policy": CSP_HEADER},
+    )
