@@ -76,7 +76,7 @@ class _TextExtractor(HTMLParser):
         self._parts: list[str] = []
         self._in_pre = False
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "pre":
             self._in_pre = True
             self._newline()
