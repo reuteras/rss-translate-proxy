@@ -25,4 +25,3 @@ jobs:
         --config=./.osv-scanner.toml
         --recursive
         ./
-
