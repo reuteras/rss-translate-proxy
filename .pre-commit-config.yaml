@@ -19,10 +19,10 @@ repos:
     rev: v2.12.1b3
     hooks:
       - id: hadolint
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
+  - repo: https://github.com/betterleaks/betterleaks
+    rev: v1.7.3
     hooks:
-      - id: gitleaks
+      - id: betterleaks
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
     rev: v1.29.0
     hooks:
