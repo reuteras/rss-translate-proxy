@@ -23,7 +23,7 @@ place that fetches/translates.
 Follow the "less is safer" posture in the user's global CLAUDE.md:
 
 - Don't add a new dependency for something that's a few lines of stdlib code.
-- Current deps are deliberately few: `fastapi`, `uvicorn`, `PyYAML`, `httpx`,
+- Current deps are deliberately few: `fastapi`, `uvicorn`, `PyYAML`, `httpx2`,
   `feedparser`, `feedgen`. Any addition should be justified.
 - Pin exact versions; `uv.lock` is the source of truth for reproducible
   builds — regenerate it with `just lock` / `just lock-update`, never hand-edit.

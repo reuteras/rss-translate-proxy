@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from typing import Any, ClassVar
 
 import feedparser
-import httpx
+import httpx2
 
 from app import (
     CFG,
@@ -210,7 +210,7 @@ def fetch_full_text(url: str) -> str:
     if not url:
         return ""
     headers = {"User-Agent": "rss-translate-proxy/1.0"}
-    with httpx.Client(timeout=CFG.full_content_timeout_seconds) as client:
+    with httpx2.Client(timeout=CFG.full_content_timeout_seconds) as client:
         r = client.get(url, headers=headers)
         if r.status_code != 200:
             raise RuntimeError(f"HTTP {r.status_code}")
@@ -249,7 +249,7 @@ def fetch_full_text_via_api(feed_cfg, entry: Any) -> str:
         return ""
     url = feed_cfg.full_content_api_url_template.replace("{id}", article_id)
     headers = {"User-Agent": "rss-translate-proxy/1.0"}
-    with httpx.Client(timeout=CFG.full_content_timeout_seconds) as client:
+    with httpx2.Client(timeout=CFG.full_content_timeout_seconds) as client:
         r = client.get(url, headers=headers)
         if r.status_code != 200:
             raise RuntimeError(f"HTTP {r.status_code}")
@@ -303,7 +303,7 @@ def deepl_translate_sync(texts: list[str], target_lang: str) -> list[str]:
     headers = {"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"}
     payload = {"text": texts, "target_lang": target_lang}
 
-    with httpx.Client(timeout=30) as client:
+    with httpx2.Client(timeout=30) as client:
         r = client.post(DEEPL_ENDPOINT, json=payload, headers=headers)
         if r.status_code != 200:
             msg = f"DeepL error {r.status_code}: {r.text}"
@@ -331,11 +331,11 @@ def _lt_ready(timeout_seconds: int = 180) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            with httpx.Client(timeout=5) as client:
+            with httpx2.Client(timeout=5) as client:
                 r = client.get(url)
             if r.status_code == 200:
                 return True
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             pass
         time.sleep(2)
     return False
@@ -353,7 +353,7 @@ def libretranslate_sync(
     if LIBRETRANSLATE_API_KEY:
         payload["api_key"] = LIBRETRANSLATE_API_KEY
 
-    with httpx.Client(timeout=CFG.lt_timeout_seconds) as client:
+    with httpx2.Client(timeout=CFG.lt_timeout_seconds) as client:
         r = client.post(_lt_endpoint(), json=payload)
         if r.status_code != 200:
             raise RuntimeError(f"LibreTranslate error {r.status_code}: {r.text}")
