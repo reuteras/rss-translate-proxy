@@ -5,19 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "fastapi",
-  "uvicorn[standard]",
-  "PyYAML",
-  "httpx2==2.12.0",
-  "feedparser",
-  "feedgen",
+    "fastapi",
+    "uvicorn[standard]",
+    "pyyaml",
+    "httpx2>=2.12.0",
+    "feedparser",
+    "feedgen",
 ]
 
 [dependency-groups]
-dev = [
-    "mypy>=2.3.0",
-    "ruff>=0.16.0",
-]
+dev = ["mypy>=2.3.0", "ruff>=0.16.0"]
 
 [[tool.mypy.overrides]]
 module = ["yaml", "feedgen.*", "feedparser"]
