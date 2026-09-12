@@ -5,9 +5,11 @@ from pathlib import Path
 
 def bump_render_version(path: Path) -> str:
     data = path.read_text(encoding="utf-8")
-    m = re.search(r"^\s*render_version:\s*\"?([A-Za-z0-9._-]+)\"?\s*$", data, re.MULTILINE)
+    m = re.search(
+        r"^\s*render_version:\s*\"?([A-Za-z0-9._-]+)\"?\s*$", data, re.MULTILINE
+    )
     current = m.group(1) if m else "v1"
-    m2 = re.match(r"^(.*?)(\d+)$", current)
+    m2 = re.search(r"^(.*?)(\d+)$", current)
     if m2:
         prefix, num = m2.group(1), int(m2.group(2))
         new = f"{prefix}{num + 1}"

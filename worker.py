@@ -145,7 +145,7 @@ def html_to_text(html: str) -> str:
 
 
 def store_data_image(data_uri: str) -> str:
-    m = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$", data_uri)
+    m = re.search(r"^data:(image/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$", data_uri)
     if not m:
         return ""
     mime = m.group(1).lower()
