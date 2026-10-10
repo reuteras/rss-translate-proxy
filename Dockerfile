@@ -14,9 +14,9 @@ RUN useradd --no-create-home --shell /bin/false --uid 1000 app \
   && chown -R app:app /app
 
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8086/healthz')" || exit 1
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8086/healthz')"]
 
-USER app
+USER 1000
 
 EXPOSE 8086
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8086"]
