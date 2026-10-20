@@ -371,9 +371,9 @@ ENTRY_SLUG_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def entry_slug(item_id: str) -> str:
-    return hashlib.sha256(
-        (item_id or "").encode("utf-8", errors="ignore")
-    ).hexdigest()[:16]
+    return hashlib.sha256((item_id or "").encode("utf-8", errors="ignore")).hexdigest()[
+        :16
+    ]
 
 
 def pick_item_id(entry: Any) -> str:
@@ -399,7 +399,7 @@ def entry_text(entry: Any) -> tuple[str, str]:
     if not desc and entry.get("content"):
         try:
             desc = (entry["content"][0].get("value") or "").strip()
-        except (KeyError, IndexError, AttributeError, TypeError):
+        except KeyError, IndexError, AttributeError, TypeError:
             pass
 
     # Unescape HTML entities but keep HTML tags intact (RSS readers can render)
