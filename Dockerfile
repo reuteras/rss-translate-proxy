@@ -1,5 +1,5 @@
 FROM ghcr.io/astral-sh/uv:0.13.1 AS uv
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 COPY --from=uv /uv /uvx /bin/
