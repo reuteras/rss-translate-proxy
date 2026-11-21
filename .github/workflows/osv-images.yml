@@ -1,0 +1,101 @@
+---
+# Build each image this repo builds and scan it with osv-scanner: OS packages
+# (apt/apk) and language packages inside the image, which the lockfile-only
+# osv-scanner workflow and Dependabot do not see.
+#
+# A job fails, and so sends a notification, only for vulnerabilities that have
+# a fixed version available. In a fresh build that usually means the base
+# image lags distro security updates (add an apt/apk upgrade step), or a
+# package installed in the Dockerfile is old. Unfixed ones are only logged.
+#
+# The osv-scanner image is pinned in .github/osv-scanner/Dockerfile so that
+# Dependabot keeps its tag and digest up to date.
+
+name: osv-images
+
+"on":
+  schedule:
+    - cron: "45 */4 * * *"
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "**/Dockerfile"
+      - ".github/workflows/osv-images.yml"
+      - ".github/osv-scanner/Dockerfile"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  osv-images:
+    name: ${{ matrix.dockerfile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - context: "."
+            dockerfile: "Dockerfile"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        env:
+          CONTEXT: ${{ matrix.context }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          cp config.yaml.example config.yaml  # config.yaml is gitignored; the build needs one
+          docker build --pull -f "$DOCKERFILE" -t osv-images/target "$CONTEXT"
+          docker save -o "$RUNNER_TEMP/image.tar" osv-images/target
+
+      - name: Scan image
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          scanner=$(sed -n 's/^FROM //p' .github/osv-scanner/Dockerfile)
+          rc=0
+          docker run --rm -v "$RUNNER_TEMP:/work" "$scanner" scan image \
+            --archive /work/image.tar --format json --output-file /work/result.json || rc=$?
+          # 0 = no vulns, 1 = vulns found; anything else is a scanner error.
+          if [ "$rc" -gt 1 ]; then
+            echo "osv-scanner failed with exit code $rc"
+            exit "$rc"
+          fi
+          # A vulnerability counts as fixable when the package's own affected
+          # entry has a non-GIT range with a "fixed" event.
+          cat > "$RUNNER_TEMP/fixable.jq" <<'EOF'
+          [ .results[]?
+            | (.source.path // "?") as $src
+            | .packages[]?
+            | .package as $p
+            | .vulnerabilities[]?
+            | select(any(.affected[]?;
+                .package.name == $p.name and .package.ecosystem == $p.ecosystem
+                and any(.ranges[]?; .type != "GIT" and any(.events[]?; has("fixed")))))
+            | "\($p.ecosystem)\t\($p.name)\t\($p.version)\t\(.id)\t\($src)" ]
+          | unique | .[]
+          EOF
+          result="$RUNNER_TEMP/result.json"
+          total=$(jq '[.results[]?.packages[]?.vulnerabilities[]?.id] | unique | length' "$result")
+          fixable=$(jq -r -f "$RUNNER_TEMP/fixable.jq" "$result")
+          nfix=$(printf '%s' "$fixable" | grep -c . || true)
+          echo "$DOCKERFILE: $total vulnerabilities, $nfix with a fix available" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$nfix" -gt 0 ]; then
+            {
+              echo '```'
+              printf '%s\n' "$fixable"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Fixable vulnerabilities:"
+            printf '%s\n' "$fixable"
+            exit 1
+          fi
