@@ -51,3 +51,16 @@ updates:
       interval: "daily"
     cooldown:
       default-days: 7
+
+  # The "docker" ecosystem only reads Dockerfiles; images in compose files need this one
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+    groups:
+      compose-deps:
+        patterns:
+          - "*"
