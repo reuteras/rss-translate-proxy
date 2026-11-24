@@ -23,9 +23,10 @@ services:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
   libretranslate:
-    # latest is built from main and is newer than the last release (v1.9.6,
-    # 2026-05); pinned by digest so updates arrive as Dependabot PRs.
-    image: docker.io/libretranslate/libretranslate:latest@sha256:6f03f063a10d120cdb5986e8995d4524729d14125269bc6c49f791e49789aec8
+    # latest is built from main, so it can be newer than the last release
+    # (2026-11-24: latest = v1.10.0); pinned by digest so updates arrive as
+    # Dependabot PRs.
+    image: docker.io/libretranslate/libretranslate:latest@sha256:e8e858a1f1db7bef3b80531d2bbef0762aa1ed7143f4565f5f5254585e69912a
     container_name: rss-translate-libretranslate
     labels:
       - com.monitoring.enable=true
