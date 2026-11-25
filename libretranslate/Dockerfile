@@ -2,10 +2,9 @@
 # a pinned python:3.11.14-slim-bookworm and does not upgrade packages in its final
 # stage, so v1.10.0 shipped openssl 3.0.18-1~deb12u2 while bookworm-security had
 # 3.0.22. The nightly server-bin run rebuilds this image without cache.
-# latest is built from main, so it can be newer than the last release
-# (2026-11-24: latest = v1.10.0); pinned by digest so updates arrive as
-# Dependabot PRs.
-FROM docker.io/libretranslate/libretranslate:latest@sha256:e8e858a1f1db7bef3b80531d2bbef0762aa1ed7143f4565f5f5254585e69912a
+# Pinned to a release tag, so the version is visible, plus its digest; new
+# releases arrive as Dependabot PRs.
+FROM docker.io/libretranslate/libretranslate:v1.10.0@sha256:6cf78d417741c979a12ba4f9731284b1e66066dc090c8c810174a442e0926ba2
 
 USER 0
 # hadolint ignore=DL3005
