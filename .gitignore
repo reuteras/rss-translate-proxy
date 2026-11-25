@@ -5,7 +5,6 @@ build/
 .env
 config.yaml
 data/
-libretranslate-data/
 dist/
 wheels/
 *.egg-info
