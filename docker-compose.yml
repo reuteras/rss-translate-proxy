@@ -37,4 +37,11 @@ services:
       - LT_LOAD_ONLY=en,uk
       - LT_WORKERS=1
     volumes:
-      - ./libretranslate-data:/home/libretranslate/.local/share
+      # Named volume, not a bind mount: on first use Docker and podman copy the
+      # image's .local, owned by the libretranslate user (1032), so models can be
+      # updated. A bind-mounted host directory is owned by the host user, which
+      # rootless podman maps to root, and LibreTranslate can't write to it.
+      - libretranslate-local:/home/libretranslate/.local
+
+volumes:
+  libretranslate-local:
