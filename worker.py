@@ -3,6 +3,7 @@ import hashlib
 import html
 import os
 import re
+import sys
 import time
 from html.parser import HTMLParser
 from typing import Any, ClassVar
@@ -68,6 +69,15 @@ def heartbeat(next_within: float) -> None:
         os.replace(tmp, HEARTBEAT_FILE)
     except OSError as e:
         log_once(f"heartbeat write failed: {e}")
+
+
+def heartbeat_ok() -> bool:
+    """True while the deadline in HEARTBEAT_FILE has not passed."""
+    try:
+        with open(HEARTBEAT_FILE) as fh:
+            return time.time() <= float(fh.read())
+    except OSError, ValueError:
+        return False
 
 
 def log_once(msg: str) -> None:
@@ -779,4 +789,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Container healthcheck entry point. Kept as plain argv words because
+    # podman-compose rewrites a compose CMD list into a shell string and
+    # mangles quotes/parentheses in it.
+    if sys.argv[1:] == ["--healthcheck"]:
+        sys.exit(0 if heartbeat_ok() else 1)
     main()
