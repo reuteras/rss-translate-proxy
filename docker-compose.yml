@@ -18,13 +18,12 @@ services:
       - com.monitoring.enable=true
     command: ["python", "worker.py"]
     # The image's healthcheck probes the web app on :8086, which the worker
-    # doesn't serve. Check the worker's own heartbeat deadline instead.
+    # doesn't serve. Check the worker's own heartbeat deadline instead
+    # (see heartbeat_ok in worker.py).
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import time; raise SystemExit(time.time() > float(open('/tmp/rss-translate-worker.heartbeat').read()))"
+      # Keep this free of quotes/parentheses: podman-compose turns the list into
+      # a shell string without quoting it correctly.
+      test: ["CMD", "python", "worker.py", "--healthcheck"]
       interval: 60s
       timeout: 10s
       start_period: 60s
