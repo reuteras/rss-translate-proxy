@@ -52,6 +52,24 @@ def log(msg: str) -> None:
 _LOG_ONCE: set[str] = set()
 
 
+# Liveness for the container healthcheck (see docker-compose.yml): the file holds
+# the Unix time by which the worker promises to write it again. The healthcheck
+# fails once that deadline has passed, i.e. the loop is stuck.
+HEARTBEAT_FILE = "/tmp/rss-translate-worker.heartbeat"
+# Allowance for one feed (fetch + translate + render) or the start of a run.
+HEARTBEAT_GRACE_SECONDS = 3600
+
+
+def heartbeat(next_within: float) -> None:
+    try:
+        tmp = f"{HEARTBEAT_FILE}.tmp"
+        with open(tmp, "w") as fh:
+            fh.write(f"{time.time() + next_within:.0f}\n")
+        os.replace(tmp, HEARTBEAT_FILE)
+    except OSError as e:
+        log_once(f"heartbeat write failed: {e}")
+
+
 def log_once(msg: str) -> None:
     if msg in _LOG_ONCE:
         return
@@ -745,6 +763,7 @@ def run_once() -> None:
         written = translate_feed(f)
         total += written
         log(f"feed={f.id} translated={written}")
+        heartbeat(HEARTBEAT_GRACE_SECONDS)
 
     log(f"run complete translated_total={total}")
 
@@ -752,8 +771,11 @@ def run_once() -> None:
 def main() -> None:
     log(f"worker started poll_seconds={CFG.poll_seconds}")
     while True:
+        heartbeat(HEARTBEAT_GRACE_SECONDS)
         run_once()
-        time.sleep(max(1, CFG.poll_seconds))
+        sleep_s = max(1, CFG.poll_seconds)
+        heartbeat(sleep_s + HEARTBEAT_GRACE_SECONDS)
+        time.sleep(sleep_s)
 
 
 if __name__ == "__main__":

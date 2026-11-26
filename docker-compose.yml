@@ -17,6 +17,18 @@ services:
     labels:
       - com.monitoring.enable=true
     command: ["python", "worker.py"]
+    # The image's healthcheck probes the web app on :8086, which the worker
+    # doesn't serve. Check the worker's own heartbeat deadline instead.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import time; raise SystemExit(time.time() > float(open('/tmp/rss-translate-worker.heartbeat').read()))"
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     env_file:
       - .env
     volumes:
