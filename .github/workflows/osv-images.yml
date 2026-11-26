@@ -1,5 +1,5 @@
 ---
-# Build each image this repo builds and scan it with osv-scanner: OS packages
+# Build the app image and scan it with osv-scanner: OS packages
 # (apt/apk) and language packages inside the image, which the lockfile-only
 # osv-scanner workflow and Dependabot do not see.
 #
@@ -7,6 +7,9 @@
 # a fixed version available. In a fresh build that usually means the base
 # image lags distro security updates (add an apt/apk upgrade step), or a
 # package installed in the Dockerfile is old. Unfixed ones are only logged.
+#
+# The libretranslate image is not scanned here: it fails constantly on
+# upstream packages we can't fix, and it is covered by scanning elsewhere.
 #
 # The osv-scanner image is pinned in .github/osv-scanner/Dockerfile so that
 # Dependabot keeps its tag and digest up to date.
@@ -21,7 +24,7 @@ name: osv-images
       - main
   pull_request:
     paths:
-      - "**/Dockerfile"
+      - "Dockerfile"
       - ".github/workflows/osv-images.yml"
       - ".github/osv-scanner/Dockerfile"
   workflow_dispatch:
@@ -41,8 +44,6 @@ jobs:
         include:
           - context: "."
             dockerfile: "Dockerfile"
-          - context: "libretranslate"
-            dockerfile: "libretranslate/Dockerfile"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
